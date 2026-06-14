@@ -1,0 +1,14 @@
+version: "3.8"
+services:
+  bookbuddy:
+    build: .
+    container_name: bookbuddy
+    ports:
+      - "7842:8000"
+    volumes:
+      - ./data:/data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_URL=sqlite:////data/bookbuddy.db
+      - GOOGLE_BOOKS_API_KEY=${GOOGLE_BOOKS_API_KEY:-}
+    restart: unless-stopped

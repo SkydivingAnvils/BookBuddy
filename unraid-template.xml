@@ -1,0 +1,51 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>BookBuddy</Name>
+  <Repository>ghcr.io/skydivinganvils/bookbuddy:latest</Repository>
+  <Registry>https://ghcr.io</Registry>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/skydivinganvils/bookbuddy/issues</Support>
+  <Project>https://github.com/skydivinganvils/bookbuddy</Project>
+  <Overview>
+    BookBuddy is a family book tracker designed for parents rating books with their kids.
+    Scan or search for books, rate them per child (loved/liked/ok/disliked), add notes,
+    set a date-read, and track wishlist books you want to read. Browse your library with
+    filters by child, rating, reading level (picture book / early reader / chapter book /
+    middle grade), and get AI-powered recommendations for what to read next.
+    Includes a full PWA for iPhone home-screen install.
+  </Overview>
+  <Category>MediaApp:Other Tools:</Category>
+  <WebUI>http://[IP]:[PORT:7842]</WebUI>
+  <TemplateURL>https://raw.githubusercontent.com/skydivinganvils/unraid-templates/main/bookbuddy.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/skydivinganvils/bookbuddy/main/app/static/icon.svg</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires/>
+
+  <Config Name="Host Port" Target="7842" Default="7842" Mode="tcp"
+          Description="Port the BookBuddy web UI is served on."
+          Type="Port" Display="always" Required="true" Mask="false">7842</Config>
+
+  <Config Name="Data Path" Target="/data" Default="/mnt/user/appdata/bookbuddy"
+          Description="Persistent storage for the SQLite database. Maps to /data inside the container."
+          Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/bookbuddy</Config>
+
+  <Config Name="Database URL" Target="DATABASE_URL" Default="sqlite:////data/bookbuddy.db"
+          Description="SQLAlchemy database URL. Default stores the SQLite file in the mapped /data volume. Change only if you want an external database."
+          Type="Variable" Display="advanced" Required="false" Mask="false">sqlite:////data/bookbuddy.db</Config>
+
+  <Config Name="Google Books API Key" Target="GOOGLE_BOOKS_API_KEY" Default=""
+          Description="Optional Google Books API key. Without a key BookBuddy falls back to unauthenticated requests (lower rate limit). Get one at https://console.cloud.google.com/"
+          Type="Variable" Display="always" Required="false" Mask="true"/>
+
+  <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default=""
+          Description="Required for AI-powered book recommendations and cover scanning via Claude Vision."
+          Type="Variable" Display="always" Required="false" Mask="true"/>
+</Container>

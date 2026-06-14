@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#1B5E3B" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="BookBuddy" />
+  <title>BookBuddy</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+
+    <!-- Header -->
+    <header id="app-header">
+      <div class="header-inner">
+        <button id="header-back-btn" class="btn-icon hidden" onclick="handleBack()" aria-label="Back">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <h1 id="header-title">BookBuddy</h1>
+        <div id="header-actions"></div>
+      </div>
+    </header>
+
+    <!-- Main content -->
+    <main id="main-content">
+
+      <!-- Library View -->
+      <div class="view" id="view-library">
+        <div class="library-toolbar">
+          <div class="lib-status-tabs">
+            <button class="lib-tab active" id="lib-tab-library" onclick="switchLibStatus('library')">📚 Library</button>
+            <button class="lib-tab" id="lib-tab-wishlist" onclick="switchLibStatus('wishlist')">📋 Wishlist</button>
+          </div>
+          <div class="search-wrap">
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="search" id="lib-search" placeholder="Search books or authors…" oninput="debounceLibraryLoad()" />
+          </div>
+          <div class="filter-row">
+            <select id="lib-child-filter" onchange="loadLibrary()">
+              <option value="">All children</option>
+            </select>
+            <select id="lib-rating-filter" onchange="loadLibrary()">
+              <option value="">All ratings</option>
+              <option value="love">❤️ Love</option>
+              <option value="like">👍 Like</option>
+              <option value="neutral">😐 Neutral</option>
+              <option value="dislike">👎 Dislike</option>
+              <option value="hate">🚫 Hate</option>
+            </select>
+          </div>
+          <div class="filter-row">
+            <select id="lib-sort" onchange="loadLibrary()">
+              <option value="date_desc">Newest first</option>
+              <option value="date_asc">Oldest first</option>
+              <option value="title_asc">Title A–Z</option>
+              <option value="author_asc">Author A–Z</option>
+            </select>
+            <select id="lib-level-filter" onchange="loadLibrary()">
+              <option value="">All levels</option>
+              <option value="picture_book">Picture Book</option>
+              <option value="early_reader">Early Reader</option>
+              <option value="chapter_book">Chapter Book</option>
+              <option value="middle_grade">Middle Grade</option>
+            </select>
+          </div>
+          <div class="library-actions-row">
+            <button class="btn btn-sm btn-outline" onclick="showBulkImportModal()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 16 12 12 8 16"/><line x1="12" y1="12" x2="12" y2="21"/><path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3"/></svg>
+              Bulk Import
+            </button>
+            <button class="btn btn-sm btn-outline" onclick="exportCsv()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              Export CSV
+            </button>
+          </div>
+        </div>
+        <div id="lib-book-list" class="book-list"></div>
+      </div>
+
+      <!-- Submit Flow View -->
+      <div class="view hidden" id="view-submit">
+
+        <!-- Step 1: Photo or Search -->
+        <div class="submit-step" id="submit-step-1">
+          <div class="step-header">
+            <div class="step-num">1 of 4</div>
+            <h2>Add a Book</h2>
+          </div>
+
+          <!-- Mode tabs -->
+          <div class="submit-mode-tabs">
+            <button class="mode-tab active" id="mode-tab-photo" onclick="switchSubmitMode('photo')">📷 Photo</button>
+            <button class="mode-tab" id="mode-tab-search" onclick="switchSubmitMode('search')">🔍 Search Title</button>
+          </div>
+
+          <!-- Photo mode -->
+          <div id="submit-mode-photo">
+            <p class="step-desc" style="margin-bottom:12px">Take or upload a photo of the book cover</p>
+            <div id="image-drop-zone" class="image-drop-zone" onclick="document.getElementById('file-input').click()">
+              <div id="drop-zone-placeholder">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                <span>Tap to choose a photo</span>
+              </div>
+              <img id="image-preview" class="hidden" alt="Book cover preview" />
+            </div>
+            <div class="upload-buttons">
+              <button class="btn btn-outline" onclick="triggerFileInput(false)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+                Photo Library
+              </button>
+              <button class="btn btn-outline" onclick="triggerFileInput(true)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Use Camera
+              </button>
+            </div>
+            <input type="file" id="file-input" accept="image/*" class="hidden" onchange="handleFileChange(event)" />
+            <input type="file" id="camera-input" accept="image/*" capture="environment" class="hidden" onchange="handleFileChange(event)" />
+            <div class="step-actions">
+              <button id="identify-btn" class="btn btn-primary btn-lg" disabled onclick="runIdentify()">
+                Identify Book →
+              </button>
+            </div>
+          </div>
+
+          <!-- Search mode -->
+          <div id="submit-mode-search" class="hidden">
+            <p class="step-desc" style="margin-bottom:16px">Type a title to search Google Books and Open Library</p>
+            <div class="form-group">
+              <label for="title-search-input">Book Title</label>
+              <input type="text" id="title-search-input" placeholder="e.g. Where the Wild Things Are"
+                autocomplete="off"
+                onkeydown="if(event.key==='Enter') runTitleSearch()" />
+            </div>
+            <div class="form-group" style="margin-top:12px">
+              <label for="author-search-input">Author <span class="label-hint">(optional)</span></label>
+              <input type="text" id="author-search-input" placeholder="e.g. Maurice Sendak"
+                autocomplete="off"
+                onkeydown="if(event.key==='Enter') runTitleSearch()" />
+            </div>
+            <div class="step-actions" style="margin-top:16px">
+              <button class="btn btn-primary btn-lg" onclick="runTitleSearch()">Search →</button>
+            </div>
+            <div id="title-search-results" class="search-results-list" style="margin-top:4px"></div>
+          </div>
+        </div>
+
+        <!-- Step 2: Identification Result -->
+        <div class="submit-step hidden" id="submit-step-2">
+          <div class="step-header">
+            <div class="step-num">2 of 4</div>
+            <h2>Identification</h2>
+          </div>
+          <div id="identify-result-area"></div>
+          <div id="fix-search-panel" class="hidden">
+            <div class="search-wrap">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+              <input type="search" id="fix-search-input" placeholder="Search for the correct book…"
+                onkeydown="if(event.key==='Enter') runFixSearch()" />
+            </div>
+            <button class="btn btn-primary" onclick="runFixSearch()">Search</button>
+            <div id="fix-search-results" class="search-results-list"></div>
+          </div>
+          <div id="manual-entry-panel" class="hidden">
+            <div class="form-group">
+              <label for="manual-title">Title</label>
+              <input type="text" id="manual-title" placeholder="e.g. Where the Wild Things Are" />
+            </div>
+            <div class="form-group">
+              <label for="manual-author">Author</label>
+              <input type="text" id="manual-author" placeholder="e.g. Maurice Sendak" />
+            </div>
+            <button class="btn btn-primary" onclick="runManualSearch()">Find Book →</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Metadata Confirmation -->
+        <div class="submit-step hidden" id="submit-step-3">
+          <div class="step-header">
+            <div class="step-num">3 of 4</div>
+            <h2>Confirm Book</h2>
+          </div>
+          <div id="duplicate-banner" class="alert alert-warning hidden">
+            <strong>Already in your library.</strong> You can still add or update ratings for it.
+          </div>
+          <div id="metadata-card" class="metadata-card"></div>
+          <div class="step-actions">
+            <button class="btn btn-primary btn-lg" onclick="proceedToRating()">Continue to Rate →</button>
+            <button class="btn btn-outline btn-lg" onclick="addToWishlist()">📋 Save to Wishlist</button>
+            <button class="btn btn-ghost" onclick="goBackToStep2()">← Change book</button>
+          </div>
+        </div>
+
+        <!-- Step 4: Rate Children -->
+        <div class="submit-step hidden" id="submit-step-4">
+          <div class="step-header">
+            <div class="step-num">4 of 4</div>
+            <h2>Who read this?</h2>
+            <p class="step-desc">Select children and rate the book for each one</p>
+          </div>
+          <div id="child-rating-list" class="child-rating-list"></div>
+          <div class="form-group" style="margin-top:20px">
+            <label for="book-series">Series <span class="label-hint">(optional)</span></label>
+            <input type="text" id="book-series" placeholder="e.g. Elephant &amp; Piggie, Dragon Masters" autocomplete="off" />
+          </div>
+          <div class="form-group" style="margin-top:12px">
+            <label for="book-tags">Tags <span class="label-hint">(optional, comma-separated)</span></label>
+            <input type="text" id="book-tags" placeholder="e.g. funny, dog, adventure"
+              autocomplete="off"
+              oninput="showTagSuggestions('book-tags','book-tags-sugg')"
+              onfocus="showTagSuggestions('book-tags','book-tags-sugg')" />
+            <div id="book-tags-sugg" class="tag-suggestions"></div>
+          </div>
+          <div class="step-actions">
+            <button id="save-btn" class="btn btn-primary btn-lg" disabled onclick="saveSubmission()">
+              Save ✓
+            </button>
+          </div>
+        </div>
+
+        <!-- Success -->
+        <div class="submit-step hidden" id="submit-step-success">
+          <div class="success-screen">
+            <div class="success-icon">✓</div>
+            <h2>Book saved!</h2>
+            <p id="success-message"></p>
+            <div class="success-actions">
+              <button class="btn btn-primary" onclick="resetSubmit()">Submit Another Book</button>
+              <button class="btn btn-outline" onclick="showView('library')">View Library</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- Recommendations View -->
+      <div class="view hidden" id="view-recommendations">
+        <div class="recs-header">
+          <div class="form-group">
+            <label for="recs-child-select">Get recommendations for:</label>
+            <select id="recs-child-select" onchange="onRecsChildChange()">
+              <option value="">Select a child…</option>
+            </select>
+          </div>
+          <button id="recs-generate-btn" class="btn btn-primary" disabled onclick="generateRecommendations()">
+            Get Recommendations
+          </button>
+        </div>
+        <div id="recs-results"></div>
+      </div>
+
+      <!-- Settings View -->
+      <div class="view hidden" id="view-settings">
+        <div class="settings-section">
+          <h3>Book Identification</h3>
+          <div class="form-group">
+            <label for="confidence-slider">
+              Confidence threshold: <strong id="confidence-value">0.75</strong>
+            </label>
+            <input type="range" id="confidence-slider" min="0" max="1" step="0.05" value="0.75"
+              oninput="updateConfidenceDisplay(this.value)"
+              onchange="saveConfidenceThreshold(this.value)" />
+            <p class="hint">Books identified with lower confidence than this will trigger the manual correction flow.</p>
+          </div>
+        </div>
+        <div class="settings-section">
+          <h3>Children</h3>
+          <p class="hint">Manage the children whose reading you track.</p>
+          <button class="btn btn-outline" onclick="showView('profiles')">Manage Children →</button>
+        </div>
+        <div class="settings-section">
+          <h3>About</h3>
+          <p class="hint"><strong>BookBuddy</strong> — v1.0.0</p>
+          <p class="hint">A self-hosted family reading tracker. Photograph book covers, log ratings per child, and get age-appropriate recommendations powered by Claude AI.</p>
+        </div>
+      </div>
+
+      <!-- Profiles View -->
+      <div class="view hidden" id="view-profiles">
+        <div id="profiles-list" class="profiles-list"></div>
+        <div class="profiles-actions">
+          <button class="btn btn-primary" onclick="showAddChildForm()">+ Add Child</button>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- Bottom Navigation -->
+    <nav id="bottom-nav">
+      <button class="nav-item" data-view="library" onclick="showView('library')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>Library</span>
+      </button>
+      <button class="nav-item nav-submit" data-view="submit" onclick="showView('submit')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>Add Book</span>
+      </button>
+      <button class="nav-item" data-view="recommendations" onclick="showView('recommendations')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <span>For You</span>
+      </button>
+      <button class="nav-item" data-view="settings" onclick="showView('settings')">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>Settings</span>
+      </button>
+    </nav>
+
+  </div>
+
+  <!-- Loading overlay -->
+  <div id="loading-overlay" class="loading-overlay hidden">
+    <div class="loading-spinner"></div>
+    <p id="loading-message">Loading…</p>
+  </div>
+
+  <!-- Toast -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Modal (book detail / child form) -->
+  <div id="modal-overlay" class="modal-overlay hidden" onclick="closeModalOnOverlay(event)">
+    <div id="modal-sheet" class="modal-sheet">
+      <div class="modal-drag-handle"></div>
+      <div id="modal-content"></div>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>

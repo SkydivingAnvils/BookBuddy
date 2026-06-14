@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" rx="112" fill="#1B5E3B"/>
+  <!-- Book spine (orange) -->
+  <rect x="148" y="118" width="42" height="276" rx="12" fill="#C97B28"/>
+  <rect x="155" y="118" width="35" height="276" rx="10" fill="#E8943A"/>
+  <!-- Book body (white pages) -->
+  <rect x="178" y="118" width="194" height="276" rx="14" fill="white"/>
+  <!-- Right page-edge shadow -->
+  <rect x="360" y="126" width="8" height="260" rx="4" fill="#EDE9E2"/>
+  <!-- Title line -->
+  <rect x="208" y="172" width="136" height="15" rx="7" fill="#1B5E3B" opacity="0.22"/>
+  <!-- Body lines -->
+  <rect x="208" y="204" width="112" height="10" rx="5" fill="#1B5E3B" opacity="0.13"/>
+  <rect x="208" y="226" width="124" height="10" rx="5" fill="#1B5E3B" opacity="0.13"/>
+  <rect x="208" y="248" width="100" height="10" rx="5" fill="#1B5E3B" opacity="0.13"/>
+  <!-- Star (orange, pre-calculated 5-point at center 256,315 R=34 r=14) -->
+  <path d="M256,281 L262.5,298.8 L281.4,299.1 L267.5,310.0 L272.5,328.4 L256,317.8 L239.5,328.4 L244.5,310.0 L230.6,299.1 L249.5,298.8 Z" fill="#E8943A"/>
+</svg>
