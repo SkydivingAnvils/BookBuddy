@@ -29,7 +29,7 @@
   <DonateLink/>
   <Requires/>
 
-  <Config Name="Host Port" Target="7842" Default="7842" Mode="tcp"
+  <Config Name="Host Port" Target="8000" Default="7842" Mode="tcp"
           Description="Port the BookBuddy web UI is served on."
           Type="Port" Display="always" Required="true" Mask="false">7842</Config>
 
