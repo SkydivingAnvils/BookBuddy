@@ -1,3 +1,4 @@
+import json
 import os
 import logging
 from typing import Optional
@@ -7,6 +8,7 @@ logger = logging.getLogger(__name__)
 
 GOOGLE_BOOKS_BASE = "https://www.googleapis.com/books/v1/volumes"
 OPEN_LIBRARY_SEARCH = "https://openlibrary.org/search.json"
+HARDCOVER_GQL = "https://api.hardcover.app/v1/graphql"
 TIMEOUT = 10
 
 
@@ -26,6 +28,35 @@ def _infer_reading_level(categories: list) -> Optional[str]:
     if any(t in text for t in ["middle grade", "juvenile fiction", "juvenile literature", "children's fiction"]):
         return "middle_grade"
     return None
+
+
+def _parse_ol_series(series_list: list):
+    """Parse Open Library series list like ['Harry Potter #3', 'Harry Potter'] into (name, order)."""
+    import re
+    for entry in (series_list or []):
+        m = re.search(r'#\s*(\d+(?:\.\d+)?)', entry)
+        if m:
+            name = entry[:m.start()].strip().rstrip('#').strip()
+            return (name or None), m.group(1)
+    # No order found — return first entry as series name only
+    if series_list:
+        return series_list[0].strip() or None, None
+    return None, None
+
+
+def _parse_series_from_subtitle(subtitle: str):
+    """Extract series name and order from a subtitle like 'Harry Potter, Book 3'."""
+    import re
+    if not subtitle:
+        return None, None
+    # Patterns: "Book 3", "#3", "Volume 3", "Vol. 3", "Part 3"
+    m = re.search(r'(?:book|#|volume|vol\.?|part)\s*(\d+(?:\.\d+)?)', subtitle, re.IGNORECASE)
+    if m:
+        order = m.group(1)
+        # Series name is everything before the matched pattern (strip trailing comma/space)
+        series = subtitle[:m.start()].strip().rstrip(',').strip()
+        return (series or None), order
+    return None, None
 
 
 def _extract_google_volume(item: dict) -> dict:
@@ -51,6 +82,9 @@ def _extract_google_volume(item: dict) -> dict:
 
     authors = info.get("authors", [])
     genres = info.get("categories", [])
+    # Google Books subtitle sometimes contains series info e.g. "Harry Potter, Book 1"
+    subtitle = info.get("subtitle", "")
+    series, series_order = _parse_series_from_subtitle(subtitle)
     return {
         "google_books_id": item.get("id", ""),
         "title": info.get("title", ""),
@@ -62,6 +96,8 @@ def _extract_google_volume(item: dict) -> dict:
         "page_count": info.get("pageCount"),
         "genres": genres,
         "reading_level": _infer_reading_level(genres),
+        "series": series,
+        "series_order": series_order,
     }
 
 
@@ -83,6 +119,8 @@ def search_open_library(query: str, limit: int = 10) -> list:
                 if not title:
                     continue
                 ol_genres = doc.get("subject", [])[:3]
+                ol_series = doc.get("series", [])
+                series_name, series_order = _parse_ol_series(ol_series)
                 results.append({
                     "google_books_id": "",
                     "title": title,
@@ -94,6 +132,8 @@ def search_open_library(query: str, limit: int = 10) -> list:
                     "page_count": doc.get("number_of_pages_median"),
                     "genres": ol_genres,
                     "reading_level": _infer_reading_level(ol_genres),
+                    "series": series_name,
+                    "series_order": series_order,
                 })
             return results
     except Exception as e:
@@ -170,6 +210,8 @@ def fetch_book_metadata(title: str, author: str = "") -> Optional[dict]:
 
                 ol_authors = doc.get("author_name", [])
                 ol_genres = doc.get("subject", [])[:5]
+                ol_series = doc.get("series", [])
+                series_name, series_order = _parse_ol_series(ol_series)
                 return {
                     "google_books_id": "",
                     "title": doc.get("title", title),
@@ -181,8 +223,200 @@ def fetch_book_metadata(title: str, author: str = "") -> Optional[dict]:
                     "page_count": doc.get("number_of_pages_median"),
                     "genres": ol_genres,
                     "reading_level": _infer_reading_level(ol_genres),
+                    "series": series_name,
+                    "series_order": series_order,
                 }
     except Exception as e:
         logger.error("Open Library metadata fetch error: %s", e)
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# Explicit single-source fetchers (used by the source selector)
+# ---------------------------------------------------------------------------
+
+def fetch_google_books_metadata(title: str, author: str = "") -> Optional[dict]:
+    query = f"intitle:{title}"
+    if author:
+        query += f"+inauthor:{author}"
+    params = {"q": query, "maxResults": 1, **_google_params()}
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.get(GOOGLE_BOOKS_BASE, params=params)
+            r.raise_for_status()
+            items = r.json().get("items", [])
+            return _extract_google_volume(items[0]) if items else None
+    except Exception as e:
+        logger.error("Google Books explicit fetch error: %s", e)
+        return None
+
+
+def fetch_openlibrary_metadata(title: str, author: str = "") -> Optional[dict]:
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.get(OPEN_LIBRARY_SEARCH, params={"title": title, "author": author, "limit": 1})
+            r.raise_for_status()
+            docs = r.json().get("docs", [])
+            if not docs:
+                return None
+            doc = docs[0]
+            cover_id = doc.get("cover_i")
+            cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else ""
+            isbn_list = doc.get("isbn", [])
+            isbn = next((i for i in isbn_list if len(i) == 13), isbn_list[0] if isbn_list else "")
+            ol_authors = doc.get("author_name", [])
+            ol_genres = doc.get("subject", [])[:5]
+            ol_series = doc.get("series", [])
+            series_name, series_order = _parse_ol_series(ol_series)
+            return {
+                "google_books_id": "",
+                "title": doc.get("title", title),
+                "author": ", ".join(ol_authors[:2]) if ol_authors else author,
+                "isbn": isbn,
+                "cover_url": cover_url,
+                "description": "",
+                "published_date": str(doc.get("first_publish_year", "")),
+                "page_count": doc.get("number_of_pages_median"),
+                "genres": ol_genres,
+                "reading_level": _infer_reading_level(ol_genres),
+                "series": series_name,
+                "series_order": series_order,
+            }
+    except Exception as e:
+        logger.error("Open Library explicit fetch error: %s", e)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Hardcover (GraphQL)
+# ---------------------------------------------------------------------------
+
+_HARDCOVER_SEARCH_GQL = """
+query SearchBooks($title: String!, $limit: Int!) {
+  books(
+    where: {title: {_ilike: $title}}
+    limit: $limit
+    order_by: {users_count: desc_nulls_last}
+  ) {
+    id
+    title
+    description
+    pages
+    release_date
+    image { url }
+    isbn_13
+    isbn_10
+    contributions(where: {contribution: {_eq: "Author"}}, limit: 2) {
+      author { name }
+    }
+    book_series(limit: 1) { position series { name } }
+  }
+}
+"""
+
+
+def _parse_hardcover_book(b: dict, title: str = "", author: str = "") -> dict:
+    authors = [c["author"]["name"] for c in b.get("contributions", []) if c.get("author")]
+    series_data = b.get("book_series") or []
+    series = series_data[0]["series"]["name"] if series_data else None
+    series_order = str(series_data[0]["position"]) if series_data and series_data[0].get("position") else None
+    release = b.get("release_date") or ""
+    return {
+        "google_books_id": "",
+        "title": b.get("title") or title,
+        "author": ", ".join(authors[:2]) if authors else author,
+        "isbn": b.get("isbn_13") or b.get("isbn_10") or "",
+        "cover_url": (b.get("image") or {}).get("url") or "",
+        "description": b.get("description") or "",
+        "published_date": release[:4] if release else "",
+        "page_count": b.get("pages"),
+        "genres": [],
+        "series": series,
+        "series_order": series_order,
+        "reading_level": None,
+    }
+
+
+def search_hardcover(query: str, limit: int = 10) -> list:
+    api_key = os.getenv("HARDCOVER_API_KEY")
+    if not api_key:
+        return []
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.post(
+                HARDCOVER_GQL,
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"query": _HARDCOVER_SEARCH_GQL, "variables": {"title": f"%{query}%", "limit": limit}},
+            )
+            r.raise_for_status()
+            data = r.json()
+            if "errors" in data:
+                logger.error("Hardcover GraphQL errors: %s", data["errors"])
+                return []
+            return [_parse_hardcover_book(b) for b in data.get("data", {}).get("books", [])]
+    except Exception as e:
+        logger.error("Hardcover search error: %s", e)
+        return []
+
+
+def fetch_hardcover_metadata(title: str, author: str = "") -> Optional[dict]:
+    query = f"{title} {author}".strip()
+    results = search_hardcover(query, limit=1)
+    return results[0] if results else None
+
+
+# ---------------------------------------------------------------------------
+# Claude Haiku fallback (uses training knowledge — no ISBN, no cover)
+# ---------------------------------------------------------------------------
+
+def fetch_metadata_from_claude(title: str, author: str) -> Optional[dict]:
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+
+    prompt = (
+        f'Return metadata for the children\'s book "{title}" by {author} as JSON.\n'
+        "Fields: title (string), author (string), description (string, 2-3 sentences), "
+        "published_date (YYYY or null), page_count (integer or null), "
+        "genres (array of short tag strings like ['adventure', 'friendship']), "
+        "series (string or null — the series name if part of one), "
+        "series_order (string or null — e.g. '1', '2', '3.5'). "
+        "IMPORTANT: Do NOT include an isbn field — omit it entirely. "
+        "Only include values you are confident about. "
+        "Return only the JSON object, no other text."
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        response = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=512,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        text = response.content[0].text.strip()
+        if text.startswith("```"):
+            parts = text.split("```")
+            text = parts[1].lstrip("json").strip() if len(parts) > 1 else text
+        data = json.loads(text)
+        return {
+            "google_books_id": "",
+            "title": data.get("title") or title,
+            "author": data.get("author") or author,
+            "isbn": "",
+            "cover_url": "",
+            "description": data.get("description") or "",
+            "published_date": str(data.get("published_date") or ""),
+            "page_count": data.get("page_count"),
+            "genres": data.get("genres") or [],
+            "series": data.get("series") or None,
+            "series_order": str(data["series_order"]) if data.get("series_order") else None,
+            "reading_level": None,
+        }
+    except Exception as e:
+        logger.error("Claude Haiku metadata fallback error: %s", e)
+        return None

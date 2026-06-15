@@ -580,10 +580,15 @@ async function runTitleSearch() {
   const author = document.getElementById('author-search-input').value.trim();
   if (!title) { showToast('Enter a title to search', 'error'); return; }
 
+  const sourceEl = document.getElementById('search-source-select');
+  const searchSource = sourceEl ? sourceEl.value : 'auto';
+
   showLoading(true, 'Searching…');
   try {
     const q = author ? `${title} ${author}` : title;
-    lastSearchResults = await GET('/api/books/search?q=' + encodeURIComponent(q));
+    const params = new URLSearchParams({ q });
+    if (searchSource !== 'auto') params.set('source', searchSource);
+    lastSearchResults = await GET('/api/books/search?' + params.toString());
     const container = document.getElementById('title-search-results');
     if (!lastSearchResults.length) {
       container.innerHTML = '<p style="color:var(--text-muted);font-size:14px;text-align:center;padding:16px 0">No results found. Try a different title or spelling.</p>';
@@ -724,6 +729,8 @@ function resetSubmit() {
 
   const seriesInput = document.getElementById('book-series');
   if (seriesInput) seriesInput.value = '';
+  const seriesOrderInput = document.getElementById('book-series-order');
+  if (seriesOrderInput) seriesOrderInput.value = '';
   document.getElementById('book-tags').value = '';
   libStatus = libStatus; // preserve current tab
 
@@ -907,12 +914,20 @@ async function runManualSearch() {
   await fetchMetadata(title, author, '');
 }
 
-async function fetchMetadata(title, author, googleBooksId) {
+let availableSources = { google: true, openlibrary: true, hardcover: false, claude: true };
+let currentMetaSource = 'auto';
+
+async function loadAvailableSources() {
+  try { availableSources = await GET('/api/metadata-sources'); } catch (_) {}
+}
+
+async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
   showLoading(true, 'Fetching book details…');
   try {
     const params = new URLSearchParams();
     if (googleBooksId) params.set('google_books_id', googleBooksId);
     else { if (title) params.set('title', title); if (author) params.set('author', author); }
+    if (source !== 'auto') params.set('source', source);
 
     const [meta, dupCheck] = await Promise.all([
       GET('/api/books/metadata?' + params.toString()),
@@ -923,6 +938,7 @@ async function fetchMetadata(title, author, googleBooksId) {
     submit.isDuplicate = dupCheck.exists;
     submit.existingBookId = dupCheck.book_id;
     submit.forceDuplicate = false;
+    currentMetaSource = source;
 
     renderMetadataCard(meta);
     showSubmitStep(3);
@@ -931,6 +947,51 @@ async function fetchMetadata(title, author, googleBooksId) {
   } finally {
     showLoading(false);
   }
+}
+
+async function refetchMetadata(source) {
+  const meta = submit.metadata;
+  if (!meta) return;
+  showLoading(true, 'Trying ' + SOURCE_LABELS[source] + '…');
+  try {
+    const params = new URLSearchParams({ source });
+    if (meta.title)          params.set('title', meta.title);
+    if (meta.author)         params.set('author', meta.author);
+    if (meta.google_books_id) params.set('google_books_id', meta.google_books_id);
+    const fresh = await GET('/api/books/metadata?' + params.toString());
+    submit.metadata = { ...fresh, google_books_id: meta.google_books_id };
+    currentMetaSource = source;
+    renderMetadataCard(submit.metadata);
+    showToast(SOURCE_LABELS[source] + ' metadata loaded', 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+const SOURCE_LABELS = {
+  auto: 'Auto', google: 'Google Books', openlibrary: 'Open Library',
+  hardcover: 'Hardcover', claude: 'Ask Claude',
+};
+
+function renderSourcePills(activeSrc) {
+  const sources = [
+    { key: 'google',      label: 'Google Books', always: true },
+    { key: 'openlibrary', label: 'Open Library', always: true },
+    { key: 'hardcover',   label: 'Hardcover',    always: false },
+    { key: 'claude',      label: '✨ Ask Claude', always: false },
+  ];
+  const pills = sources.map(s => {
+    const enabled = s.always || availableSources[s.key];
+    const active  = s.key === activeSrc || (activeSrc === 'auto' && s.key === 'google');
+    return `<button
+      class="source-pill${active ? ' active' : ''}${!enabled ? ' disabled' : ''}"
+      onclick="${enabled ? `refetchMetadata('${s.key}')` : ''}"
+      title="${!enabled ? s.label + ' — API key not configured' : ''}"
+    >${s.label}</button>`;
+  }).join('');
+  return `<div class="source-pills"><span class="source-pills-label">Source:</span>${pills}</div>`;
 }
 
 function renderMetadataCard(meta) {
@@ -946,13 +1007,18 @@ function renderMetadataCard(meta) {
     meta.page_count     ? `<div class="metadata-meta-item"><strong>Pages:</strong> ${meta.page_count}</div>` : '',
   ].filter(Boolean).join('');
 
+  const claudeNote = currentMetaSource === 'claude'
+    ? `<div class="source-claude-note">✨ Metadata from Claude's training data — no ISBN or cover available</div>` : '';
+
   document.getElementById('metadata-card').innerHTML = `
+    ${renderSourcePills(currentMetaSource)}
     ${coverHtml}
     <div class="metadata-body">
       <div class="metadata-title">${esc(meta.title)}</div>
       <div class="metadata-author">by ${esc(meta.author)}</div>
-      ${meta.description ? `<div class="metadata-desc">${esc(meta.description)}</div>` : ''}
+      ${meta.description ? `<div class="metadata-desc">${esc(meta.description.replace(/<[^>]*>/g, ''))}</div>` : ''}
       ${metaItems ? `<div class="metadata-meta">${metaItems}</div>` : ''}
+      ${claudeNote}
     </div>`;
 }
 
@@ -979,7 +1045,32 @@ async function proceedToRating() {
 
   submit.selections = {};
   renderChildRatingList();
+
+  // Pre-populate series, series order, and tags from metadata
+  const meta = submit.metadata || {};
+  const seriesEl = document.getElementById('book-series');
+  const orderEl  = document.getElementById('book-series-order');
+  const tagsEl   = document.getElementById('book-tags');
+  if (seriesEl) seriesEl.value = meta.series || '';
+  if (orderEl)  orderEl.value  = meta.series_order || '';
+  if (tagsEl && !tagsEl.value) tagsEl.value = genresToTags(meta.genres);
+
   showSubmitStep(4);
+}
+
+function genresToTags(genres) {
+  const noise = new Set([
+    'juvenile fiction', 'juvenile nonfiction', 'fiction', 'nonfiction',
+    'general', 'books', 'young adult fiction', 'children', "children's",
+  ]);
+  const tags = new Set();
+  for (const g of (genres || [])) {
+    for (const part of g.split('/')) {
+      const t = part.trim().toLowerCase();
+      if (t && !noise.has(t)) tags.add(t);
+    }
+  }
+  return [...tags].slice(0, 6).join(', ');
 }
 
 async function addToWishlist() {
@@ -1107,13 +1198,15 @@ async function saveSubmission() {
 
   if (!ratingsList.length) { showToast('Select at least one child and rating', 'error'); return; }
 
-  const series = document.getElementById('book-series')?.value.trim() || null;
-  const tags   = document.getElementById('book-tags').value.trim();
+  const series      = document.getElementById('book-series')?.value.trim() || null;
+  const seriesOrder = document.getElementById('book-series-order')?.value.trim() || null;
+  const tags        = document.getElementById('book-tags').value.trim();
 
   const payload = {
     title:          meta.title,
     author:         meta.author,
     series:         series,
+    series_order:   seriesOrder,
     isbn:           meta.isbn || null,
     cover_url:      meta.cover_url || null,
     description:    meta.description || null,
@@ -1478,6 +1571,7 @@ async function init() {
     [allChildren] = await Promise.all([
       GET('/api/children'),
       fetchAllTags(),
+      loadAvailableSources(),
     ]);
     populateChildFilters();
   } catch { allChildren = []; }

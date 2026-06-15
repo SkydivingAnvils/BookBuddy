@@ -48,4 +48,8 @@
   <Config Name="Anthropic API Key" Target="ANTHROPIC_API_KEY" Default=""
           Description="Required for AI-powered book recommendations and cover scanning via Claude Vision."
           Type="Variable" Display="always" Required="false" Mask="true"/>
+
+  <Config Name="Hardcover API Key" Target="HARDCOVER_API_KEY" Default=""
+          Description="Optional. Enables Hardcover as a metadata source for books not found on Google Books or Open Library. Get a key at hardcover.app."
+          Type="Variable" Display="always" Required="false" Mask="true"/>
 </Container>

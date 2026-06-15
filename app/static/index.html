@@ -129,7 +129,6 @@
 
           <!-- Search mode -->
           <div id="submit-mode-search" class="hidden">
-            <p class="step-desc" style="margin-bottom:16px">Type a title to search Google Books and Open Library</p>
             <div class="form-group">
               <label for="title-search-input">Book Title</label>
               <input type="text" id="title-search-input" placeholder="e.g. Where the Wild Things Are"
@@ -141,6 +140,15 @@
               <input type="text" id="author-search-input" placeholder="e.g. Maurice Sendak"
                 autocomplete="off"
                 onkeydown="if(event.key==='Enter') runTitleSearch()" />
+            </div>
+            <div class="form-group search-source-row" style="margin-top:12px">
+              <label for="search-source-select">Search source</label>
+              <select id="search-source-select">
+                <option value="auto">Auto (Google + Open Library)</option>
+                <option value="google">Google Books</option>
+                <option value="openlibrary">Open Library</option>
+                <option value="hardcover">Hardcover</option>
+              </select>
             </div>
             <div class="step-actions" style="margin-top:16px">
               <button class="btn btn-primary btn-lg" onclick="runTitleSearch()">Search →</button>
@@ -203,9 +211,15 @@
             <p class="step-desc">Select children and rate the book for each one</p>
           </div>
           <div id="child-rating-list" class="child-rating-list"></div>
-          <div class="form-group" style="margin-top:20px">
-            <label for="book-series">Series <span class="label-hint">(optional)</span></label>
-            <input type="text" id="book-series" placeholder="e.g. Elephant &amp; Piggie, Dragon Masters" autocomplete="off" />
+          <div class="form-group series-row" style="margin-top:20px">
+            <div class="series-name-wrap">
+              <label for="book-series">Series <span class="label-hint">(optional)</span></label>
+              <input type="text" id="book-series" placeholder="e.g. Dragon Masters" autocomplete="off" />
+            </div>
+            <div class="series-order-wrap">
+              <label for="book-series-order">Book #</label>
+              <input type="text" id="book-series-order" placeholder="1" autocomplete="off" style="width:100%" />
+            </div>
           </div>
           <div class="form-group" style="margin-top:12px">
             <label for="book-tags">Tags <span class="label-hint">(optional, comma-separated)</span></label>

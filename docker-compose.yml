@@ -11,4 +11,5 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - DATABASE_URL=sqlite:////data/bookbuddy.db
       - GOOGLE_BOOKS_API_KEY=${GOOGLE_BOOKS_API_KEY:-}
+      - HARDCOVER_API_KEY=${HARDCOVER_API_KEY:-}
     restart: unless-stopped

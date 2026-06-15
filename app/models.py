@@ -30,7 +30,8 @@ class Book(Base):
     page_count = Column(Integer, nullable=True)
     genres = Column(Text, nullable=True)       # JSON array stored as string
     tags = Column(Text, nullable=True)         # Comma-separated free text
-    series = Column(String, nullable=True)     # e.g. "Elephant & Piggie"
+    series = Column(String, nullable=True)          # e.g. "Elephant & Piggie"
+    series_order = Column(String, nullable=True)    # e.g. "1", "2.5"
     reading_level = Column(String, nullable=True)  # picture_book | early_reader | chapter_book | middle_grade
     status = Column(String, default="library", index=True)    # library | wishlist
     google_books_id = Column(String, nullable=True, index=True)

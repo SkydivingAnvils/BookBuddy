@@ -41,6 +41,7 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS ix_ratings_child_id ON ratings (child_id)",
             "CREATE INDEX IF NOT EXISTS ix_books_google_books_id ON books (google_books_id)",
             "CREATE INDEX IF NOT EXISTS ix_books_status ON books (status)",
+            "ALTER TABLE books ADD COLUMN series_order TEXT",
         ]:
             try:
                 conn.execute(text(stmt))

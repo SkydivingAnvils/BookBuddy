@@ -14,7 +14,12 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 
-from .books_api import fetch_book_metadata, fetch_by_google_id, search_books
+from .books_api import (
+    fetch_book_metadata, fetch_by_google_id, search_books,
+    fetch_google_books_metadata, fetch_openlibrary_metadata,
+    fetch_hardcover_metadata, fetch_metadata_from_claude,
+    search_google_books, search_open_library, search_hardcover,
+)
 from .claude import get_recommendations, identify_book
 from .config import get_setting
 from .database import get_db, init_db
@@ -74,6 +79,7 @@ class BookSubmit(BaseModel):
     genres: Optional[List[str]] = None
     tags: Optional[str] = None
     series: Optional[str] = None
+    series_order: Optional[str] = None
     reading_level: Optional[str] = None
     google_books_id: Optional[str] = None
     ratings: List[RatingItem] = []
@@ -86,6 +92,7 @@ class BookUpdate(BaseModel):
     author: Optional[str] = None
     tags: Optional[str] = None
     series: Optional[str] = None
+    series_order: Optional[str] = None
     reading_level: Optional[str] = None
 
 
@@ -153,6 +160,7 @@ def _book_dict(book: Book, db: Session) -> dict:
         "genres": genres,
         "tags": book.tags,
         "series": book.series,
+        "series_order": book.series_order,
         "reading_level": book.reading_level,
         "status": book.status or "library",
         "google_books_id": book.google_books_id,
@@ -244,18 +252,45 @@ async def identify_book_endpoint(image: UploadFile = File(...)):
 # Book metadata & search
 # ---------------------------------------------------------------------------
 
+VALID_SEARCH_SOURCES = {"auto", "google", "openlibrary", "hardcover"}
+
 @app.get("/api/books/search")
-def search_books_endpoint(q: str):
-    return search_books(q)
+def search_books_endpoint(q: str, source: str = "auto"):
+    if source == "google":
+        return search_google_books(q)
+    if source == "openlibrary":
+        return search_open_library(q)
+    if source == "hardcover":
+        if not os.getenv("HARDCOVER_API_KEY"):
+            raise HTTPException(status_code=400, detail="HARDCOVER_API_KEY is not configured.")
+        return search_hardcover(q)
+    return search_books(q)  # auto: Google + Open Library
 
 
 @app.get("/api/books/metadata")
-def get_metadata(title: str = "", author: str = "", google_books_id: str = ""):
+def get_metadata(title: str = "", author: str = "", google_books_id: str = "", source: str = "auto"):
     result = None
-    if google_books_id:
-        result = fetch_by_google_id(google_books_id)
-    if not result:
-        result = fetch_book_metadata(title, author)
+
+    if source == "google":
+        if google_books_id:
+            result = fetch_by_google_id(google_books_id)
+        if not result:
+            result = fetch_google_books_metadata(title, author)
+    elif source == "openlibrary":
+        result = fetch_openlibrary_metadata(title, author)
+    elif source == "hardcover":
+        if not os.getenv("HARDCOVER_API_KEY"):
+            raise HTTPException(status_code=400, detail="HARDCOVER_API_KEY is not configured.")
+        result = fetch_hardcover_metadata(title, author)
+    elif source == "claude":
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            raise HTTPException(status_code=400, detail="ANTHROPIC_API_KEY is not configured.")
+        result = fetch_metadata_from_claude(title, author)
+    else:  # auto
+        if google_books_id:
+            result = fetch_by_google_id(google_books_id)
+        if not result:
+            result = fetch_book_metadata(title, author)
 
     if not result:
         return {
@@ -270,6 +305,16 @@ def get_metadata(title: str = "", author: str = "", google_books_id: str = ""):
             "genres": [],
         }
     return result
+
+
+@app.get("/api/metadata-sources")
+def metadata_sources():
+    return {
+        "google": True,
+        "openlibrary": True,
+        "hardcover": bool(os.getenv("HARDCOVER_API_KEY")),
+        "claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+    }
 
 
 @app.get("/api/books/check-duplicate")
@@ -336,6 +381,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
             genres=json.dumps(data.genres or []),
             tags=data.tags,
             series=data.series,
+            series_order=data.series_order,
             reading_level=data.reading_level,
             status=data.status,
             google_books_id=data.google_books_id,
@@ -347,6 +393,8 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
             book.tags = data.tags
         if data.series:
             book.series = data.series
+        if data.series_order:
+            book.series_order = data.series_order
         if data.reading_level:
             book.reading_level = data.reading_level
         # Promote from wishlist → library when ratings are added
@@ -439,6 +487,8 @@ def update_book(book_id: int, data: BookUpdate, db: Session = Depends(get_db)):
         book.tags = data.tags
     if data.series is not None:
         book.series = data.series or None
+    if data.series_order is not None:
+        book.series_order = data.series_order or None
     if data.reading_level is not None:
         if data.reading_level and data.reading_level not in VALID_READING_LEVELS:
             raise HTTPException(status_code=400, detail="Invalid reading level")
