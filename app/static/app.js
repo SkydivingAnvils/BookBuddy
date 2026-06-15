@@ -25,6 +25,7 @@ let libSearchTimer = null;
 let libStatus = 'library';
 let lastRecs = [];
 let currentModalBook = null;
+let libraryCatalogUrl = '';
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -1293,6 +1294,10 @@ function renderRecommendations(recs) {
     const coverHtml = rec.cover_url
       ? `<img src="${esc(rec.cover_url)}" loading="lazy" onerror="this.style.display='none'" alt="" />`
       : `<div style="font-size:28px">📖</div>`;
+    const libUrl = buildLibraryUrl(rec);
+    const libBtn = libUrl
+      ? `<a class="btn btn-outline btn-sm rec-lib-btn" href="${esc(libUrl)}" target="_blank" rel="noopener">🏛 Check Library</a>`
+      : '';
     return `
       <div class="rec-card">
         <div class="rec-cover-wrap">${coverHtml}</div>
@@ -1300,7 +1305,11 @@ function renderRecommendations(recs) {
           <div class="rec-title">${esc(rec.title)}</div>
           <div class="rec-author">by ${esc(rec.author)}</div>
           <div class="rec-reason">${esc(rec.reason)}</div>
-          <button class="btn btn-outline btn-sm rec-wishlist-btn" onclick="wishlistRec(${i})">📋 Wishlist</button>
+          <div class="rec-actions">
+            <button class="btn btn-primary btn-sm" onclick="readRec(${i})">✓ We read it!</button>
+            <button class="btn btn-outline btn-sm rec-wishlist-btn" onclick="wishlistRec(${i})">📋 Wishlist</button>
+            ${libBtn}
+          </div>
         </div>
       </div>`;
   }).join('');
@@ -1335,6 +1344,53 @@ async function wishlistRec(index) {
   }
 }
 
+async function readRec(index) {
+  const rec = lastRecs[index];
+  if (!rec) return;
+  showLoading(true, 'Fetching book details…');
+  try {
+    allChildren = await GET('/api/children');
+    if (!allChildren.length) {
+      showToast('Add at least one child in Settings → Children first', 'error');
+      return;
+    }
+    const params = new URLSearchParams({ title: rec.title, author: rec.author || '', source: 'auto' });
+    let meta = null;
+    try { meta = await GET('/api/books/metadata?' + params); } catch {}
+    submit.metadata = meta || {
+      title: rec.title, author: rec.author || '',
+      cover_url: rec.cover_url || '', isbn: '',
+      google_books_id: rec.google_books_id || '',
+      genres: [], series: null, series_order: null,
+    };
+    submit.identified = { title: rec.title, author: rec.author || '', confidence: 1.0 };
+    submit.isDuplicate = false;
+    submit.forceDuplicate = false;
+    submit.selections = {};
+
+    // Switch to submit view at step 4
+    currentView = 'submit';
+    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
+    document.getElementById('view-submit')?.classList.remove('hidden');
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    setHeader('Add a Book', false);
+
+    renderChildRatingList();
+    const m = submit.metadata;
+    const seriesEl = document.getElementById('book-series');
+    const orderEl  = document.getElementById('book-series-order');
+    const tagsEl   = document.getElementById('book-tags');
+    if (seriesEl) seriesEl.value = m.series || '';
+    if (orderEl)  orderEl.value  = m.series_order || '';
+    if (tagsEl)   tagsEl.value   = genresToTags(m.genres);
+    showSubmitStep(4);
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -1346,6 +1402,10 @@ async function loadSettings() {
     const slider = document.getElementById('confidence-slider');
     slider.value = threshold;
     document.getElementById('confidence-value').textContent = threshold.toFixed(2);
+
+    libraryCatalogUrl = settings.library_catalog_url || '';
+    const urlInput = document.getElementById('library-catalog-url');
+    if (urlInput) urlInput.value = libraryCatalogUrl;
   } catch (e) {
     showToast('Failed to load settings', 'error');
   }
@@ -1362,6 +1422,26 @@ async function saveConfidenceThreshold(value) {
   } catch (e) {
     showToast(e.message, 'error');
   }
+}
+
+async function saveLibraryCatalogUrl(value) {
+  const url = value.trim().replace(/\/+$/, ''); // strip trailing slashes
+  try {
+    await PUT('/api/settings', { key: 'library_catalog_url', value: url });
+    libraryCatalogUrl = url;
+    showToast('Library URL saved', 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function buildLibraryUrl(book) {
+  if (!libraryCatalogUrl) return null;
+  if (book.isbn) {
+    return `${libraryCatalogUrl}/search/results?qu=isbn%3A${encodeURIComponent(book.isbn)}&te=ILS`;
+  }
+  const q = encodeURIComponent(`${book.title} ${book.author || ''}`.trim());
+  return `${libraryCatalogUrl}/search/results?qu=${q}&qf=TITLE&te=ILS`;
 }
 
 // ---------------------------------------------------------------------------

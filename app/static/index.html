@@ -282,6 +282,15 @@
           </div>
         </div>
         <div class="settings-section">
+          <h3>Library Catalog</h3>
+          <div class="form-group">
+            <label for="library-catalog-url">Catalog base URL</label>
+            <input type="url" id="library-catalog-url" placeholder="https://yourlib.ent.sirsi.net/client/en_US/default"
+              onchange="saveLibraryCatalogUrl(this.value)" />
+            <p class="hint">SirsiDynix Enterprise catalogs: paste the URL up to and including <code>/default</code>. Used for "Check Library" links on books.</p>
+          </div>
+        </div>
+        <div class="settings-section">
           <h3>Children</h3>
           <p class="hint">Manage the children whose reading you track.</p>
           <button class="btn btn-outline" onclick="showView('profiles')">Manage Children →</button>

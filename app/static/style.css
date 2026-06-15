@@ -1167,10 +1167,20 @@ input[type="range"]::-webkit-slider-thumb {
 /* ============================================================
    Rec wishlist button
    ============================================================ */
-.rec-wishlist-btn {
+.rec-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
   margin-top: 8px;
+}
+.rec-actions .btn-sm {
   font-size: 12px;
   padding: 4px 10px;
+}
+.rec-lib-btn {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
 }
 
 /* ============================================================

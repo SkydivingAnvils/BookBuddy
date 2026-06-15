@@ -2,6 +2,7 @@ version: "3.8"
 services:
   bookbuddy:
     build: .
+    platform: linux/amd64
     container_name: bookbuddy
     ports:
       - "7842:8000"
