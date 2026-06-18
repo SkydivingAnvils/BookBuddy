@@ -169,9 +169,9 @@ a:hover { text-decoration: underline; }
   height: 56px;
   flex: none;
   align-self: center;
-  margin: 0 8px;
+  margin: 0 6px;
   margin-bottom: 4px;
-  box-shadow: 0 4px 12px rgba(27,94,59,0.4);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 60%, transparent);
   padding: 0;
   font-size: 10px;
 }
@@ -769,6 +769,33 @@ input[type="range"]::-webkit-slider-thumb {
 }
 .settings-section:last-child { border-bottom: none; }
 .settings-section h3 { font-size: 16px; font-weight: 700; }
+
+.settings-actions-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.theme-swatches {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 4px 0;
+}
+.theme-swatch {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 3px solid transparent;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
+}
+.theme-swatch:hover { transform: scale(1.1); }
+.theme-swatch.active { border-color: var(--text); }
+.theme-swatch svg { width: 18px; height: 18px; }
 
 /* ============================================================
    Profiles View

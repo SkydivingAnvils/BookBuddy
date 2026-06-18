@@ -54,6 +54,7 @@ def init_db():
         defaults = {
             "confidence_threshold": "0.75",
             "library_catalog_url": "https://losalamos.ent.sirsi.net/client/en_US/default",
+            "color_scheme": "forest",
         }
         for key, value in defaults.items():
             if not db.query(Setting).filter(Setting.key == key).first():

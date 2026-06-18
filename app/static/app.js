@@ -27,6 +27,47 @@ let lastRecs = [];
 let currentModalBook = null;
 let libraryCatalogUrl = '';
 
+const THEMES = {
+  forest:   { label: 'Forest',   primary: '#1B5E3B', primaryLight: '#2E7D52', primarySubtle: '#E8F5EE', accent: '#E8943A', accentLight: '#FDEBD0' },
+  ocean:    { label: 'Ocean',    primary: '#0C4A6E', primaryLight: '#1565A0', primarySubtle: '#E0F2FE', accent: '#F4A621', accentLight: '#FEF3C7' },
+  amethyst: { label: 'Amethyst', primary: '#4A1D96', primaryLight: '#6D28D9', primarySubtle: '#EDE9FE', accent: '#E8943A', accentLight: '#FDEBD0' },
+  crimson:  { label: 'Crimson',  primary: '#881337', primaryLight: '#9F1239', primarySubtle: '#FFF1F2', accent: '#D97706', accentLight: '#FEF3C7' },
+  slate:    { label: 'Slate',    primary: '#1E3A5F', primaryLight: '#2D5282', primarySubtle: '#EFF6FF', accent: '#E8943A', accentLight: '#FDEBD0' },
+};
+
+function applyTheme(key) {
+  const t = THEMES[key] || THEMES.forest;
+  const root = document.documentElement;
+  root.style.setProperty('--primary',        t.primary);
+  root.style.setProperty('--primary-light',  t.primaryLight);
+  root.style.setProperty('--primary-subtle', t.primarySubtle);
+  root.style.setProperty('--accent',         t.accent);
+  root.style.setProperty('--accent-light',   t.accentLight);
+}
+
+async function saveColorScheme(key) {
+  applyTheme(key);
+  renderThemeSwatches(key);
+  try {
+    await PUT('/api/settings', { key: 'color_scheme', value: key });
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function renderThemeSwatches(activeKey) {
+  const container = document.getElementById('theme-swatches');
+  if (!container) return;
+  container.innerHTML = Object.entries(THEMES).map(([key, t]) => `
+    <button class="theme-swatch ${key === activeKey ? 'active' : ''}"
+            onclick="saveColorScheme('${key}')"
+            title="${t.label}"
+            style="background:${t.primary}">
+      ${key === activeKey ? '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>' : ''}
+    </button>
+  `).join('');
+}
+
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
@@ -216,8 +257,10 @@ function handleBack() {
 async function showView(name) {
   currentView = name;
 
+  // Wishlist shares the library view DOM
+  const viewId = name === 'wishlist' ? 'library' : name;
   document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-  const el = document.getElementById('view-' + name);
+  const el = document.getElementById('view-' + viewId);
   if (el) el.classList.remove('hidden');
 
   // Update nav
@@ -225,10 +268,20 @@ async function showView(name) {
   const navEl = document.querySelector(`.nav-item[data-view="${name}"]`);
   if (navEl) navEl.classList.add('active');
 
+  // Hide rating filter for wishlist (no ratings on wish items)
+  const ratingFilter = document.getElementById('lib-rating-filter');
+  if (ratingFilter) ratingFilter.closest('.filter-row').style.display = name === 'wishlist' ? 'none' : '';
+
   // Per-view init
   switch (name) {
     case 'library':
+      libStatus = 'library';
       setHeader('📚 BookBuddy', false);
+      await loadLibrary();
+      break;
+    case 'wishlist':
+      libStatus = 'wishlist';
+      setHeader('📋 Wishlist', false);
       await loadLibrary();
       break;
     case 'submit':
@@ -1406,6 +1459,10 @@ async function loadSettings() {
     libraryCatalogUrl = settings.library_catalog_url || '';
     const urlInput = document.getElementById('library-catalog-url');
     if (urlInput) urlInput.value = libraryCatalogUrl;
+
+    const scheme = settings.color_scheme || 'forest';
+    applyTheme(scheme);
+    renderThemeSwatches(scheme);
   } catch (e) {
     showToast('Failed to load settings', 'error');
   }
@@ -1647,6 +1704,13 @@ function populateChildFilters() {
 // ---------------------------------------------------------------------------
 
 async function init() {
+  // Apply saved theme immediately to avoid flash of wrong color
+  try {
+    const settings = await GET('/api/settings');
+    applyTheme(settings.color_scheme || 'forest');
+    libraryCatalogUrl = settings.library_catalog_url || '';
+  } catch {}
+
   try {
     [allChildren] = await Promise.all([
       GET('/api/children'),
