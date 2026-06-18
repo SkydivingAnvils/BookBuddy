@@ -7,7 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Generate PWA icon PNGs (solid green #1B5E3B) — no extra deps required
+# Generate PWA icon PNGs from icon-master.png using Pillow
 RUN python3 gen_icons.py
 
 # Stamp a unique build version into the service worker so browsers always
