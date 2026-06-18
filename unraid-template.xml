@@ -20,7 +20,7 @@
   <Category>MediaApp:Other Tools:</Category>
   <WebUI>http://[IP]:[PORT:7842]</WebUI>
   <TemplateURL>https://raw.githubusercontent.com/skydivinganvils/unraid-templates/main/bookbuddy.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/skydivinganvils/bookbuddy/main/app/static/icon.svg</Icon>
+  <Icon>https://raw.githubusercontent.com/SkydivingAnvils/BookBuddy/main/app/static/icon-512.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>
