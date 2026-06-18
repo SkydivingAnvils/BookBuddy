@@ -33,7 +33,7 @@
           Description="Port the BookBuddy web UI is served on."
           Type="Port" Display="always" Required="true" Mask="false">7842</Config>
 
-  <Config Name="Data Path" Target="/data" Default="/mnt/user/appdata/bookbuddy"
+  <Config Name="Data Path" Target="/data" Default="/mnt/user/appdata/bookbuddy" Mode="rw"
           Description="Persistent storage for the SQLite database. Maps to /data inside the container."
           Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/bookbuddy</Config>
 
