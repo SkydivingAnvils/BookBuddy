@@ -196,6 +196,10 @@
             <h2>Who read this?</h2>
             <p class="step-desc">Select children and rate the book for each one</p>
           </div>
+          <div class="form-group global-date-row">
+            <label for="book-date-read">Date read <span class="label-hint">(optional — applies to all children)</span></label>
+            <input type="date" id="book-date-read" onchange="setGlobalDateRead(this.value)" />
+          </div>
           <div id="child-rating-list" class="child-rating-list"></div>
           <div class="form-group series-row" style="margin-top:20px">
             <div class="series-name-wrap">

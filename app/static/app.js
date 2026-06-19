@@ -763,6 +763,8 @@ function resetSubmit() {
   submit.forceDuplicate = false;
   submit.selections = {};
   submit.savedBookId = null;
+  const dateEl = document.getElementById('book-date-read');
+  if (dateEl) dateEl.value = '';
 
   document.querySelectorAll('.submit-step').forEach(el => el.classList.add('hidden'));
   document.getElementById('submit-step-1').classList.remove('hidden');
@@ -1105,6 +1107,10 @@ async function proceedToRating() {
   submit.selections = {};
   renderChildRatingList();
 
+  // Default global date to today
+  const dateEl = document.getElementById('book-date-read');
+  if (dateEl) { dateEl.max = getTodayDate(); if (!dateEl.value) dateEl.value = getTodayDate(); }
+
   // Pre-populate series, series order, and tags from metadata
   const meta = submit.metadata || {};
   const seriesEl = document.getElementById('book-series');
@@ -1211,15 +1217,17 @@ function renderChildRatingList() {
             ${ratingEmoji(r)}<span>${ratingLabel(r)}</span>
           </button>`).join('')}
       </div>
-      <div class="rating-date-row hidden" id="rating-date-${child.id}">
-        <label for="rating-date-input-${child.id}">Date read <span class="label-hint">(optional)</span></label>
-        <input type="date" id="rating-date-input-${child.id}" max="${getTodayDate()}"
-          onchange="setChildDateRead(${child.id}, this.value)" />
-      </div>
       <div class="rating-notes-row hidden" id="rating-notes-${child.id}">
         <input type="text" id="rating-notes-input-${child.id}"
           placeholder="Notes — loved the dog, too scary, etc. (optional)"
           oninput="setChildNotes(${child.id}, this.value)" />
+      </div>
+      <div class="rating-self-row hidden" id="rating-self-${child.id}">
+        <label class="self-read-label">
+          <input type="checkbox" id="rating-self-input-${child.id}"
+            onchange="setChildReadMyself(${child.id}, this.checked)" />
+          <span>📖 ${esc(child.name)} read it independently</span>
+        </label>
       </div>
     </div>`).join('');
 }
@@ -1232,18 +1240,17 @@ function toggleChildSelect(childId) {
     document.getElementById('child-avatar-' + childId).classList.remove('selected');
     document.getElementById('child-check-' + childId).classList.remove('checked');
     document.getElementById('rating-btns-' + childId).classList.add('hidden');
-    document.getElementById('rating-date-' + childId).classList.add('hidden');
     document.getElementById('rating-notes-' + childId).classList.add('hidden');
+    document.getElementById('rating-self-' + childId).classList.add('hidden');
   } else {
-    submit.selections[`${childId}`] = { rating: null, date_read: getTodayDate(), notes: null };
+    const globalDate = document.getElementById('book-date-read')?.value || getTodayDate();
+    submit.selections[`${childId}`] = { rating: null, date_read: globalDate, notes: null, read_myself: false };
     document.getElementById('child-card-' + childId).classList.add('selected');
     document.getElementById('child-avatar-' + childId).classList.add('selected');
     document.getElementById('child-check-' + childId).classList.add('checked');
     document.getElementById('rating-btns-' + childId).classList.remove('hidden');
-    document.getElementById('rating-date-' + childId).classList.remove('hidden');
     document.getElementById('rating-notes-' + childId).classList.remove('hidden');
-    const di = document.getElementById('rating-date-input-' + childId);
-    if (di && !di.value) di.value = getTodayDate();
+    document.getElementById('rating-self-' + childId).classList.remove('hidden');
   }
   updateSaveButton();
 }
@@ -1258,9 +1265,16 @@ function setChildRating(childId, rating, btn) {
   updateSaveButton();
 }
 
-function setChildDateRead(childId, dateVal) {
+function setGlobalDateRead(dateVal) {
+  // Apply the chosen date to every already-selected child
+  for (const key of Object.keys(submit.selections)) {
+    submit.selections[key].date_read = dateVal || null;
+  }
+}
+
+function setChildReadMyself(childId, checked) {
   const sel = submit.selections[`${childId}`];
-  if (sel) sel.date_read = dateVal || null;
+  if (sel) sel.read_myself = checked;
 }
 
 function setChildNotes(childId, text) {
@@ -1278,9 +1292,16 @@ async function saveSubmission() {
   const meta = submit.metadata;
   if (!meta) return;
 
+  const globalDate = document.getElementById('book-date-read')?.value || null;
   const ratingsList = Object.entries(submit.selections)
     .filter(([,s]) => s?.rating !== null)
-    .map(([childId, s]) => ({ child_id: parseInt(childId), rating: s.rating, date_read: s.date_read || null, notes: s.notes || null }));
+    .map(([childId, s]) => ({
+      child_id: parseInt(childId),
+      rating: s.rating,
+      date_read: globalDate || s.date_read || null,
+      notes: s.notes || null,
+      read_myself: s.read_myself || false,
+    }));
 
   if (!ratingsList.length) { showToast('Select at least one child and rating', 'error'); return; }
 

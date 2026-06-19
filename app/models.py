@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, Integer, String, Date, DateTime, ForeignKey, Text, UniqueConstraint
 from sqlalchemy.orm import relationship, declarative_base
 
 Base = declarative_base()
@@ -49,8 +49,9 @@ class Rating(Base):
     book_id = Column(Integer, ForeignKey("books.id"), nullable=False, index=True)
     child_id = Column(Integer, ForeignKey("children.id"), nullable=False, index=True)
     rating = Column(String, nullable=False)  # love | like | neutral | dislike | hate
-    notes = Column(Text, nullable=True)      # reserved for future use
-    date_read = Column(Date, nullable=True)  # user-set date the book was actually read
+    notes = Column(Text, nullable=True)
+    date_read = Column(Date, nullable=True)
+    read_myself = Column(Boolean, default=False, nullable=True)  # child read independently
     created_at = Column(DateTime, default=datetime.utcnow)
 
     book = relationship("Book", back_populates="ratings")

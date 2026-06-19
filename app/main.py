@@ -66,6 +66,7 @@ class RatingItem(BaseModel):
     rating: str
     date_read: Optional[date] = None
     notes: Optional[str] = None
+    read_myself: Optional[bool] = None
 
 
 class BookSubmit(BaseModel):
@@ -102,6 +103,7 @@ class RatingUpdate(BaseModel):
     rating: Optional[str] = None
     date_read: Optional[date] = None
     notes: Optional[str] = None
+    read_myself: Optional[bool] = None
 
 
 class SettingUpdate(BaseModel):
@@ -141,6 +143,7 @@ def _book_dict(book: Book, db: Session) -> dict:
                 "rating_id": r.id,
                 "date_read": r.date_read.isoformat() if r.date_read else None,
                 "notes": r.notes,
+                "read_myself": bool(r.read_myself),
             }
 
     genres: list = []
@@ -383,9 +386,12 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
                     existing.date_read = r.date_read
                 if r.notes is not None:
                     existing.notes = r.notes
+                if r.read_myself is not None:
+                    existing.read_myself = r.read_myself
             else:
                 db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
-                              date_read=r.date_read, notes=r.notes))
+                              date_read=r.date_read, notes=r.notes,
+                              read_myself=r.read_myself or False))
         db.commit()
         return {"ok": True, "book_id": book.id, "duplicate": False}
 
@@ -449,9 +455,12 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
                 existing.date_read = r.date_read
             if r.notes is not None:
                 existing.notes = r.notes
+            if r.read_myself is not None:
+                existing.read_myself = r.read_myself
         else:
             db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
-                          date_read=r.date_read, notes=r.notes))
+                          date_read=r.date_read, notes=r.notes,
+                          read_myself=r.read_myself or False))
 
     db.commit()
     return {"ok": True, "book_id": book.id, "duplicate": False}
@@ -558,7 +567,9 @@ def update_rating(rating_id: int, data: RatingUpdate, db: Session = Depends(get_
     if "date_read" in data.model_fields_set:
         r.date_read = data.date_read
     if "notes" in data.model_fields_set:
-        r.notes = data.notes if data.notes else None  # empty string → NULL
+        r.notes = data.notes if data.notes else None
+    if data.read_myself is not None:
+        r.read_myself = data.read_myself
     db.commit()
     return {"ok": True}
 

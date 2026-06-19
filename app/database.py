@@ -42,6 +42,7 @@ def init_db():
             "CREATE INDEX IF NOT EXISTS ix_books_google_books_id ON books (google_books_id)",
             "CREATE INDEX IF NOT EXISTS ix_books_status ON books (status)",
             "ALTER TABLE books ADD COLUMN series_order TEXT",
+            "ALTER TABLE ratings ADD COLUMN read_myself INTEGER DEFAULT 0",
         ]:
             try:
                 conn.execute(text(stmt))
