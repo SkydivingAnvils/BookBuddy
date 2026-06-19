@@ -19,6 +19,7 @@ const submit = {
   existingBookId: null,
   forceDuplicate: false,
   selections: {},     // childId (string) -> rating string
+  savedBookId: null,  // book already saved as placeholder — ratings will target this ID
 };
 
 let libSearchTimer = null;
@@ -761,6 +762,7 @@ function resetSubmit() {
   submit.existingBookId = null;
   submit.forceDuplicate = false;
   submit.selections = {};
+  submit.savedBookId = null;
 
   document.querySelectorAll('.submit-step').forEach(el => el.classList.add('hidden'));
   document.getElementById('submit-step-1').classList.remove('hidden');
@@ -1082,20 +1084,23 @@ function goBackToStep2() {
 
 async function proceedToRating() {
   if (submit.isDuplicate) submit.forceDuplicate = true;
-  showLoading(true);
+  showLoading(true, 'Saving book…');
   try {
-    // Refresh children list
     allChildren = await GET('/api/children');
   } catch (e) {
     allChildren = [];
-  } finally {
-    showLoading(false);
   }
 
   if (!allChildren.length) {
+    showLoading(false);
     showToast('Add at least one child in Settings → Children first', 'error');
     return;
   }
+
+  // Save book to library immediately so it's tracked even if user bails on rating
+  await _savePlaceholder();
+
+  showLoading(false);
 
   submit.selections = {};
   renderChildRatingList();
@@ -1110,6 +1115,33 @@ async function proceedToRating() {
   if (tagsEl && !tagsEl.value) tagsEl.value = genresToTags(meta.genres);
 
   showSubmitStep(4);
+}
+
+async function _savePlaceholder() {
+  if (submit.savedBookId) return; // already saved
+  if (submit.existingBookId) {
+    // Book already in library/wishlist — target it directly for ratings
+    submit.savedBookId = submit.existingBookId;
+    return;
+  }
+  const meta = submit.metadata;
+  if (!meta) return;
+  try {
+    const result = await POST('/api/books/submit', {
+      title: meta.title, author: meta.author,
+      isbn: meta.isbn || null, cover_url: meta.cover_url || null,
+      description: meta.description || null, published_date: meta.published_date || null,
+      page_count: meta.page_count || null, genres: meta.genres || [],
+      google_books_id: meta.google_books_id || null,
+      series: meta.series || null, series_order: meta.series_order || null,
+      reading_level: meta.reading_level || null,
+      ratings: [], placeholder: true,
+    });
+    // result.book_id is set for both new books and unexpected duplicates
+    submit.savedBookId = result.book_id;
+  } catch (e) {
+    console.warn('Placeholder save failed (will retry at submission):', e);
+  }
 }
 
 function genresToTags(genres) {
@@ -1270,16 +1302,19 @@ async function saveSubmission() {
     tags:           tags || null,
     google_books_id: meta.google_books_id || null,
     ratings:        ratingsList,
-    force_duplicate: submit.forceDuplicate,
+    // If we already saved a placeholder, target it directly (skip duplicate logic)
+    ...(submit.savedBookId
+      ? { book_id: submit.savedBookId }
+      : { force_duplicate: submit.forceDuplicate }),
   };
 
   showLoading(true, 'Saving…');
   try {
     const result = await POST('/api/books/submit', payload);
-    if (result.duplicate && !payload.force_duplicate) {
-      // Shouldn't normally happen (we set force_duplicate), but handle gracefully
-      submit.forceDuplicate = true;
+    if (!submit.savedBookId && result.duplicate && !payload.force_duplicate) {
+      // Fallback: unexpected duplicate detected, force through
       payload.force_duplicate = true;
+      delete payload.book_id;
       await POST('/api/books/submit', payload);
     }
     // Show success and refresh tag cache
@@ -1420,6 +1455,10 @@ async function readRec(index) {
     submit.isDuplicate = false;
     submit.forceDuplicate = false;
     submit.selections = {};
+    submit.savedBookId = null;
+
+    // Save placeholder immediately before showing rating screen
+    await _savePlaceholder();
 
     // Switch to submit view at step 4
     currentView = 'submit';

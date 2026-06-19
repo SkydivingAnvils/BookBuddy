@@ -85,6 +85,8 @@ class BookSubmit(BaseModel):
     ratings: List[RatingItem] = []
     status: str = "library"
     force_duplicate: bool = False
+    placeholder: bool = False   # save book now, ratings will follow
+    book_id: Optional[int] = None  # add ratings to a specific existing book
 
 
 class BookUpdate(BaseModel):
@@ -341,7 +343,8 @@ def check_duplicate(title: str = "", author: str = "", google_books_id: str = ""
 def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
     if data.status not in {"library", "wishlist"}:
         raise HTTPException(status_code=400, detail="Invalid status.")
-    if data.status == "library" and not data.ratings:
+    # Allow empty ratings for placeholders and book_id-targeted updates
+    if data.status == "library" and not data.ratings and not data.placeholder and data.book_id is None:
         raise HTTPException(status_code=400, detail="At least one rating is required.")
     if data.reading_level and data.reading_level not in VALID_READING_LEVELS:
         raise HTTPException(status_code=400, detail="Invalid reading level.")
@@ -354,6 +357,37 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
     for r in data.ratings:
         if not db.query(Child).filter(Child.id == r.child_id).first():
             raise HTTPException(status_code=400, detail=f"Child {r.child_id} not found.")
+
+    # Fast path: attach ratings to a book we already created as a placeholder
+    if data.book_id is not None:
+        book = db.query(Book).filter(Book.id == data.book_id).first()
+        if not book:
+            raise HTTPException(status_code=404, detail="Book not found.")
+        if data.tags is not None:
+            book.tags = data.tags or None
+        if data.series:
+            book.series = data.series
+        if data.series_order:
+            book.series_order = data.series_order
+        if data.reading_level:
+            book.reading_level = data.reading_level
+        if data.ratings and book.status == "wishlist":
+            book.status = "library"
+        for r in data.ratings:
+            existing = db.query(Rating).filter(
+                Rating.book_id == book.id, Rating.child_id == r.child_id
+            ).first()
+            if existing:
+                existing.rating = r.rating
+                if r.date_read is not None:
+                    existing.date_read = r.date_read
+                if r.notes is not None:
+                    existing.notes = r.notes
+            else:
+                db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
+                              date_read=r.date_read, notes=r.notes))
+        db.commit()
+        return {"ok": True, "book_id": book.id, "duplicate": False}
 
     # Duplicate detection
     book = None
