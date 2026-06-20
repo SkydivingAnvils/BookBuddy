@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>BookBuddy</Name>
-  <Repository>ghcr.io/skydivinganvils/bookbuddy:latest</Repository>
-  <Registry>https://ghcr.io</Registry>
+  <Repository>skydivinganvils/bookbuddy:latest</Repository>
+  <Registry>https://hub.docker.com</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
