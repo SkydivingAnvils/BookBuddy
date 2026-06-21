@@ -293,47 +293,32 @@ def fetch_openlibrary_metadata(title: str, author: str = "") -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 _HARDCOVER_SEARCH_GQL = """
-query SearchBooks($title: String!, $limit: Int!) {
-  books(
-    where: {title: {_ilike: $title}}
-    limit: $limit
-    order_by: {users_count: desc_nulls_last}
-  ) {
-    id
-    title
-    description
-    pages
-    release_date
-    image { url }
-    isbn_13
-    isbn_10
-    contributions(where: {contribution: {_eq: "Author"}}, limit: 2) {
-      author { name }
-    }
-    book_series(limit: 1) { position series { name } }
+query SearchBooks($query: String!, $limit: Int!) {
+  search(query: $query, query_type: "Book", per_page: $limit) {
+    results
   }
 }
 """
 
 
-def _parse_hardcover_book(b: dict, title: str = "", author: str = "") -> dict:
-    authors = [c["author"]["name"] for c in b.get("contributions", []) if c.get("author")]
-    series_data = b.get("book_series") or []
-    series = series_data[0]["series"]["name"] if series_data else None
-    series_order = str(series_data[0]["position"]) if series_data and series_data[0].get("position") else None
-    release = b.get("release_date") or ""
+def _parse_hardcover_doc(doc: dict, title: str = "", author: str = "") -> dict:
+    authors = doc.get("author_names") or []
+    isbns = doc.get("isbns") or []
+    image = doc.get("image") or {}
+    release_year = doc.get("release_year")
+    series_names = doc.get("series_names") or []
     return {
         "google_books_id": "",
-        "title": b.get("title") or title,
+        "title": doc.get("title") or title,
         "author": ", ".join(authors[:2]) if authors else author,
-        "isbn": b.get("isbn_13") or b.get("isbn_10") or "",
-        "cover_url": (b.get("image") or {}).get("url") or "",
-        "description": b.get("description") or "",
-        "published_date": release[:4] if release else "",
-        "page_count": b.get("pages"),
-        "genres": [],
-        "series": series,
-        "series_order": series_order,
+        "isbn": isbns[0] if isbns else "",
+        "cover_url": image.get("url") or "",
+        "description": doc.get("description") or "",
+        "published_date": str(release_year) if release_year and release_year > 1000 else "",
+        "page_count": doc.get("pages"),
+        "genres": doc.get("genres") or [],
+        "series": series_names[0] if series_names else None,
+        "series_order": None,
         "reading_level": None,
     }
 
@@ -350,14 +335,15 @@ def search_hardcover(query: str, limit: int = 10) -> list:
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={"query": _HARDCOVER_SEARCH_GQL, "variables": {"title": f"%{query}%", "limit": limit}},
+                json={"query": _HARDCOVER_SEARCH_GQL, "variables": {"query": query, "limit": limit}},
             )
             r.raise_for_status()
             data = r.json()
             if "errors" in data:
                 logger.error("Hardcover GraphQL errors: %s", data["errors"])
                 return []
-            return [_parse_hardcover_book(b) for b in data.get("data", {}).get("books", [])]
+            hits = (data.get("data", {}).get("search", {}).get("results", {}).get("hits") or [])
+            return [_parse_hardcover_doc(h["document"]) for h in hits if h.get("document")]
     except Exception as e:
         logger.error("Hardcover search error: %s", e)
         return []
