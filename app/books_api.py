@@ -346,7 +346,10 @@ def search_hardcover(query: str, limit: int = 10) -> list:
         with httpx.Client(timeout=TIMEOUT) as client:
             r = client.post(
                 HARDCOVER_GQL,
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers={
+                    "Authorization": api_key,
+                    "Content-Type": "application/json",
+                },
                 json={"query": _HARDCOVER_SEARCH_GQL, "variables": {"title": f"%{query}%", "limit": limit}},
             )
             r.raise_for_status()
