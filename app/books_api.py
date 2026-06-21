@@ -361,9 +361,15 @@ def search_hardcover(query: str, limit: int = 10) -> list:
 
 
 def fetch_hardcover_metadata(title: str, author: str = "") -> Optional[dict]:
-    query = f"{title} {author}".strip()
-    results = search_hardcover(query, limit=1)
-    return results[0] if results else None
+    results = search_hardcover(title, limit=5)
+    if not results:
+        return None
+    if author:
+        author_lower = author.lower()
+        for r in results:
+            if author_lower in r.get("author", "").lower():
+                return r
+    return results[0]
 
 
 # ---------------------------------------------------------------------------
