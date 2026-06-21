@@ -306,7 +306,11 @@ def _parse_hardcover_doc(doc: dict, title: str = "", author: str = "") -> dict:
     isbns = doc.get("isbns") or []
     image = doc.get("image") or {}
     release_year = doc.get("release_year")
-    series_names = doc.get("series_names") or []
+    featured = doc.get("featured_series") or {}
+    series_info = featured.get("series") or {}
+    series = series_info.get("name") or None
+    position = featured.get("position")
+    series_order = str(int(position)) if position and position == int(position) else str(position) if position else None
     return {
         "google_books_id": "",
         "title": doc.get("title") or title,
@@ -317,8 +321,8 @@ def _parse_hardcover_doc(doc: dict, title: str = "", author: str = "") -> dict:
         "published_date": str(release_year) if release_year and release_year > 1000 else "",
         "page_count": doc.get("pages"),
         "genres": doc.get("genres") or [],
-        "series": series_names[0] if series_names else None,
-        "series_order": None,
+        "series": series,
+        "series_order": series_order,
         "reading_level": None,
     }
 
