@@ -347,7 +347,7 @@ def search_hardcover(query: str, limit: int = 10) -> list:
             r = client.post(
                 HARDCOVER_GQL,
                 headers={
-                    "Authorization": api_key,
+                    "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={"query": _HARDCOVER_SEARCH_GQL, "variables": {"title": f"%{query}%", "limit": limit}},
