@@ -98,7 +98,7 @@ def get_recommendations(child_name: str, age: int, reading_history: list) -> lis
         f"The child's name is {child_name} and they are {age} years old. "
         f"Here is their reading history with ratings:\n{history_lines}"
         f"{series_note}\n\n"
-        f"Based on their preferences and age, suggest 8 books they haven't read yet. "
+        f"Based on their preferences and age, suggest 20 books they haven't read yet. "
         f"Return JSON only: an array of objects each with fields: "
         f"title, author, reason (one sentence, why this suits this child based on their history). "
         f"No other text."
@@ -106,7 +106,7 @@ def get_recommendations(child_name: str, age: int, reading_history: list) -> lis
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=1024,
+        max_tokens=2048,
         messages=[{"role": "user", "content": prompt}],
     )
 

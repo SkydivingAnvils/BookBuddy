@@ -25,6 +25,7 @@ const submit = {
 let libSearchTimer = null;
 let libStatus = 'library';
 let lastRecs = [];
+const recsCache = {}; // keyed by childId
 let currentModalBook = null;
 let libraryCatalogUrl = '';
 
@@ -996,7 +997,11 @@ async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
     submit.isDuplicate = dupCheck.exists;
     submit.existingBookId = dupCheck.book_id;
     submit.forceDuplicate = false;
+    submit.savedBookId = null;
     currentMetaSource = source;
+
+    // Save placeholder as soon as the book is identified — before user proceeds to rating
+    await _savePlaceholder();
 
     renderMetadataCard(meta);
     showSubmitStep(3);
@@ -1103,7 +1108,8 @@ async function proceedToRating() {
     return;
   }
 
-  // Save book to library immediately so it's tracked even if user bails on rating
+  // Placeholder already saved at identification — _savePlaceholder is idempotent
+  // but call it anyway in case user reached step 4 via a path that skipped step 3
   await _savePlaceholder();
 
   showLoading(false);
@@ -1379,14 +1385,21 @@ function onRecsChildChange() {
     !document.getElementById('recs-child-select').value;
 }
 
-async function generateRecommendations() {
+async function generateRecommendations(force = false) {
   const childId = document.getElementById('recs-child-select').value;
   if (!childId) return;
+
+  if (!force && recsCache[childId]) {
+    lastRecs = recsCache[childId];
+    renderRecommendations(lastRecs);
+    return;
+  }
 
   showLoading(true, 'Asking Claude for recommendations…');
   try {
     const recs = await GET('/api/recommendations/' + childId);
     lastRecs = recs;
+    recsCache[childId] = recs;
     renderRecommendations(recs);
   } catch (e) {
     showToast(e.message, 'error');
@@ -1398,6 +1411,8 @@ async function generateRecommendations() {
 }
 
 function renderRecommendations(recs) {
+  const refreshBtn = document.getElementById('recs-refresh-btn');
+  if (refreshBtn) refreshBtn.style.display = recs.length ? '' : 'none';
   if (!recs.length) {
     document.getElementById('recs-results').innerHTML =
       '<div class="empty-state"><p>No recommendations returned. Try again.</p></div>';
@@ -1460,13 +1475,8 @@ async function wishlistRec(index) {
 async function readRec(index) {
   const rec = lastRecs[index];
   if (!rec) return;
-  showLoading(true, 'Fetching book details…');
+  showLoading(true, 'Saving to library…');
   try {
-    allChildren = await GET('/api/children');
-    if (!allChildren.length) {
-      showToast('Add at least one child in Settings → Children first', 'error');
-      return;
-    }
     const params = new URLSearchParams({ title: rec.title, author: rec.author || '', source: 'auto' });
     let meta = null;
     try { meta = await GET('/api/books/metadata?' + params); } catch {}
@@ -1479,28 +1489,11 @@ async function readRec(index) {
     submit.identified = { title: rec.title, author: rec.author || '', confidence: 1.0 };
     submit.isDuplicate = false;
     submit.forceDuplicate = false;
-    submit.selections = {};
     submit.savedBookId = null;
 
-    // Save placeholder immediately before showing rating screen
+    // Save to library as placeholder — user can rate later from Library tab
     await _savePlaceholder();
-
-    // Switch to submit view at step 4
-    currentView = 'submit';
-    document.querySelectorAll('.view').forEach(v => v.classList.add('hidden'));
-    document.getElementById('view-submit')?.classList.remove('hidden');
-    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-    setHeader('Add a Book', false);
-
-    renderChildRatingList();
-    const m = submit.metadata;
-    const seriesEl = document.getElementById('book-series');
-    const orderEl  = document.getElementById('book-series-order');
-    const tagsEl   = document.getElementById('book-tags');
-    if (seriesEl) seriesEl.value = m.series || '';
-    if (orderEl)  orderEl.value  = m.series_order || '';
-    if (tagsEl)   tagsEl.value   = genresToTags(m.genres);
-    showSubmitStep(4);
+    showToast(`"${rec.title}" saved — rate it anytime from Library`, 'success');
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
