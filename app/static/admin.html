@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BookBuddy Admin</title>
+  <link rel="stylesheet" href="/admin.css" />
+</head>
+<body>
+  <div class="layout">
+    <!-- Sidebar -->
+    <nav class="sidebar">
+      <div class="sidebar-header">
+        <span class="sidebar-logo">&#x1F4DA; BookBuddy</span>
+        <span class="sidebar-subtitle">Admin</span>
+      </div>
+      <ul class="nav-list">
+        <li><a href="#" class="nav-link active" data-section="library">&#x1F4D6; Library</a></li>
+        <li><a href="#" class="nav-link" data-section="import">&#x1F4E5; Import</a></li>
+        <li><a href="#" class="nav-link" data-section="covers">&#x1F5BC; Covers</a></li>
+        <li><a href="#" class="nav-link" data-section="export">&#x1F4E4; Export</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <a href="/" class="back-link">&#x2190; Back to App</a>
+      </div>
+    </nav>
+
+    <!-- Main -->
+    <main class="main">
+
+      <!-- Library section -->
+      <section id="section-library" class="section active">
+        <div class="section-header">
+          <h1>Library</h1>
+          <div class="filter-bar">
+            <input type="text" id="lib-search" placeholder="Search title, author, series, tags&hellip;" />
+            <select id="lib-status">
+              <option value="">All statuses</option>
+              <option value="library">Library</option>
+              <option value="wishlist">Wishlist</option>
+            </select>
+            <select id="lib-missing">
+              <option value="">No filter</option>
+              <option value="cover">Missing cover</option>
+              <option value="description">Missing description</option>
+              <option value="isbn">Missing ISBN</option>
+            </select>
+            <button class="btn btn-primary" id="lib-apply">Apply Filters</button>
+          </div>
+        </div>
+
+        <div id="lib-loading" class="loading-msg">Loading books&hellip;</div>
+        <div id="lib-empty" class="empty-msg" style="display:none">No books match these filters.</div>
+
+        <div class="table-wrapper" id="lib-table-wrapper" style="display:none">
+          <table class="data-table" id="lib-table">
+            <thead>
+              <tr>
+                <th class="col-check"><input type="checkbox" id="select-all" /></th>
+                <th class="col-cover">Cover</th>
+                <th class="col-title">Title</th>
+                <th class="col-author">Author</th>
+                <th class="col-series">Series</th>
+                <th class="col-num">#</th>
+                <th class="col-level">Level</th>
+                <th class="col-tags">Tags</th>
+                <th class="col-status">Status</th>
+                <th class="col-ratings">Ratings</th>
+                <th class="col-actions">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="lib-tbody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Import section -->
+      <section id="section-import" class="section">
+        <div class="section-header">
+          <h1>Import CSV</h1>
+        </div>
+        <div class="import-tools">
+          <button class="btn btn-secondary" id="download-template">Download Template CSV</button>
+        </div>
+        <div class="dropzone" id="dropzone">
+          <p>Drag &amp; drop a CSV file here, or</p>
+          <label class="btn btn-primary" for="csv-file-input">Choose File</label>
+          <input type="file" id="csv-file-input" accept=".csv" style="display:none" />
+          <p id="drop-filename" class="drop-filename"></p>
+        </div>
+
+        <div id="import-preview" style="display:none">
+          <div class="import-summary" id="import-summary"></div>
+          <div class="table-wrapper">
+            <table class="data-table">
+              <thead id="preview-thead"></thead>
+              <tbody id="preview-tbody"></tbody>
+            </table>
+          </div>
+          <div class="import-actions">
+            <button class="btn btn-primary" id="commit-import">Commit Import</button>
+            <span id="import-result"></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Covers section -->
+      <section id="section-covers" class="section">
+        <div class="section-header">
+          <h1>Cover Art</h1>
+          <div class="filter-bar">
+            <label>
+              <input type="checkbox" id="covers-missing-only" checked />
+              Missing covers only
+            </label>
+            <button class="btn btn-primary" id="covers-load">Load</button>
+          </div>
+        </div>
+        <div id="covers-loading" class="loading-msg" style="display:none">Loading&hellip;</div>
+        <div id="covers-grid" class="covers-grid"></div>
+      </section>
+
+      <!-- Export section -->
+      <section id="section-export" class="section">
+        <div class="section-header">
+          <h1>Export</h1>
+        </div>
+        <div class="export-block">
+          <div id="export-stats" class="export-stats">Loading stats&hellip;</div>
+          <a class="btn btn-primary" href="/api/export/csv" download="bookbuddy_export.csv">Download CSV</a>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <!-- Bulk action bar -->
+  <div class="bulk-bar" id="bulk-bar">
+    <span id="bulk-count">0 books selected</span>
+    <div class="bulk-actions">
+      <div class="bulk-dropdown">
+        <button class="btn btn-sm btn-light bulk-trigger">Set Level &#9660;</button>
+        <div class="bulk-menu" id="bulk-level-menu">
+          <a href="#" data-val="picture_book">Picture Book</a>
+          <a href="#" data-val="early_reader">Early Reader</a>
+          <a href="#" data-val="chapter_book">Chapter Book</a>
+          <a href="#" data-val="middle_grade">Middle Grade</a>
+          <a href="#" data-val="">Clear Level</a>
+        </div>
+      </div>
+      <div class="bulk-dropdown">
+        <button class="btn btn-sm btn-light bulk-trigger">Set Status &#9660;</button>
+        <div class="bulk-menu" id="bulk-status-menu">
+          <a href="#" data-val="library">Library</a>
+          <a href="#" data-val="wishlist">Wishlist</a>
+        </div>
+      </div>
+      <button class="btn btn-sm btn-light" id="bulk-add-tags">Add Tags</button>
+      <button class="btn btn-sm btn-light" id="bulk-refetch">Refetch Metadata</button>
+      <button class="btn btn-sm btn-danger" id="bulk-delete">Delete</button>
+      <button class="btn btn-sm btn-ghost" id="bulk-deselect">Deselect</button>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container"></div>
+
+  <script src="/admin.js"></script>
+</body>
+</html>

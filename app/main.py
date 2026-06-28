@@ -9,7 +9,7 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
@@ -93,6 +93,10 @@ class BookSubmit(BaseModel):
 class BookUpdate(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
+    cover_url: Optional[str] = None
+    isbn: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
     tags: Optional[str] = None
     series: Optional[str] = None
     series_order: Optional[str] = None
@@ -526,6 +530,16 @@ def update_book(book_id: int, data: BookUpdate, db: Session = Depends(get_db)):
         book.title = data.title
     if data.author is not None:
         book.author = data.author
+    if data.cover_url is not None:
+        book.cover_url = data.cover_url or None
+    if data.isbn is not None:
+        book.isbn = data.isbn or None
+    if data.description is not None:
+        book.description = data.description or None
+    if data.status is not None:
+        if data.status not in {"library", "wishlist"}:
+            raise HTTPException(status_code=400, detail="Invalid status")
+        book.status = data.status
     if data.tags is not None:
         book.tags = data.tags
     if data.series is not None:
@@ -844,6 +858,193 @@ def export_csv(db: Session = Depends(get_db)):
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=bookbuddy_export.csv"},
     )
+
+
+# ---------------------------------------------------------------------------
+# Admin API
+# ---------------------------------------------------------------------------
+
+class AdminBulkUpdate(BaseModel):
+    ids: list[int]
+    reading_level: Optional[str] = None   # set to empty string to clear
+    status: Optional[str] = None
+    tags_set: Optional[str] = None        # replace tags entirely
+    tags_append: Optional[str] = None     # add to existing tags (comma-sep)
+
+
+class AdminMerge(BaseModel):
+    keep_id: int
+    delete_id: int
+
+
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    with open(os.path.join(STATIC_DIR, "admin.html")) as f:
+        return f.read()
+
+
+@app.get("/api/admin/books")
+def admin_list_books(
+    search: Optional[str] = None,
+    status: Optional[str] = None,
+    missing: Optional[str] = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(Book)
+
+    if status:
+        query = query.filter(Book.status == status)
+
+    if search:
+        pattern = f"%{search}%"
+        query = query.filter(
+            (Book.title.ilike(pattern))
+            | (Book.author.ilike(pattern))
+            | (Book.series.ilike(pattern))
+            | (Book.tags.ilike(pattern))
+        )
+
+    if missing == "cover":
+        query = query.filter((Book.cover_url.is_(None)) | (Book.cover_url == ""))
+    elif missing == "description":
+        query = query.filter((Book.description.is_(None)) | (Book.description == ""))
+    elif missing == "isbn":
+        query = query.filter((Book.isbn.is_(None)) | (Book.isbn == ""))
+
+    query = query.options(joinedload(Book.ratings).joinedload(Rating.child))
+    query = query.order_by(Book.title.asc())
+    return [_book_dict(b, db) for b in query.all()]
+
+
+@app.post("/api/admin/bulk-update")
+def admin_bulk_update(data: AdminBulkUpdate, db: Session = Depends(get_db)):
+    if not data.ids:
+        return {"updated": 0}
+
+    books = db.query(Book).filter(Book.id.in_(data.ids)).all()
+    if not books:
+        raise HTTPException(status_code=404, detail="No books found")
+
+    for book in books:
+        if data.reading_level is not None:
+            level = data.reading_level.strip()
+            if level and level not in VALID_READING_LEVELS:
+                raise HTTPException(status_code=400, detail=f"Invalid reading level: {level}")
+            book.reading_level = level or None
+        if data.status is not None:
+            if data.status not in {"library", "wishlist"}:
+                raise HTTPException(status_code=400, detail="Invalid status")
+            book.status = data.status
+        if data.tags_set is not None:
+            book.tags = data.tags_set or None
+        if data.tags_append is not None and data.tags_append.strip():
+            new_tags = [t.strip() for t in data.tags_append.split(",") if t.strip()]
+            if new_tags:
+                existing = [t.strip() for t in (book.tags or "").split(",") if t.strip()]
+                combined = existing + [t for t in new_tags if t not in existing]
+                book.tags = ", ".join(combined)
+        book.updated_at = datetime.utcnow()
+
+    db.commit()
+    return {"updated": len(books)}
+
+
+@app.post("/api/admin/merge")
+def admin_merge_books(data: AdminMerge, db: Session = Depends(get_db)):
+    keep = db.query(Book).filter(Book.id == data.keep_id).first()
+    delete = db.query(Book).filter(Book.id == data.delete_id).first()
+    if not keep:
+        raise HTTPException(status_code=404, detail="Keep book not found")
+    if not delete:
+        raise HTTPException(status_code=404, detail="Delete book not found")
+    if data.keep_id == data.delete_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a book with itself")
+
+    # Get child_ids already rated on the keep book
+    keep_child_ids = {r.child_id for r in keep.ratings}
+
+    # Reassign ratings that don't conflict
+    for r in list(delete.ratings):
+        if r.child_id not in keep_child_ids:
+            r.book_id = data.keep_id
+            keep_child_ids.add(r.child_id)
+        else:
+            db.delete(r)
+
+    db.flush()
+    db.delete(delete)
+    db.commit()
+    db.refresh(keep)
+    return _book_dict(keep, db)
+
+
+@app.post("/api/admin/csv/preview")
+async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    content = await file.read()
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = content.decode("latin-1")
+
+    children = db.query(Child).all()
+    child_by_name = {c.name.lower(): c for c in children}
+    child_names = [c.name for c in children]
+
+    reader = csv.DictReader(io.StringIO(text))
+    raw_rows = [row for row in reader if row.get("Title", "").strip()]
+
+    if not raw_rows:
+        raise HTTPException(status_code=400, detail="No valid rows found. Make sure the CSV has a 'Title' column header.")
+    if len(raw_rows) > 200:
+        raise HTTPException(status_code=400, detail="Maximum 200 books per preview.")
+
+    preview_rows = []
+    new_count = 0
+    duplicate_count = 0
+
+    for row in raw_rows:
+        title = row.get("Title", "").strip()
+        author = row.get("Author", "").strip()
+        series = row.get("Series", "").strip() or None
+        tags = row.get("Tags", "").strip() or None
+
+        # Duplicate detection
+        existing_book = None
+        if author:
+            existing_book = db.query(Book).filter(Book.title.ilike(title), Book.author.ilike(author)).first()
+        if not existing_book:
+            existing_book = db.query(Book).filter(Book.title.ilike(title)).first()
+
+        is_duplicate = existing_book is not None
+
+        # Collect ratings from child-named columns
+        ratings: dict = {}
+        for col, val in row.items():
+            child = child_by_name.get(col.strip().lower())
+            if child and val.strip().lower() in VALID_RATINGS:
+                ratings[child.name] = val.strip().lower()
+
+        preview_rows.append({
+            "title": title,
+            "author": author,
+            "series": series,
+            "tags": tags,
+            "status": "duplicate" if is_duplicate else "new",
+            "existing_id": existing_book.id if existing_book else None,
+            "ratings": ratings,
+        })
+
+        if is_duplicate:
+            duplicate_count += 1
+        else:
+            new_count += 1
+
+    return {
+        "rows": preview_rows,
+        "new_count": new_count,
+        "duplicate_count": duplicate_count,
+        "child_names": child_names,
+    }
 
 
 # ---------------------------------------------------------------------------
