@@ -1010,12 +1010,16 @@ async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
 async function refetchMetadata(source) {
   const meta = submit.metadata;
   if (!meta) return;
+  // Always search using the original vision/scan title, not the (possibly wrong) matched title
+  const identified = submit.identified || {};
+  const searchTitle = identified.title || meta.title;
+  const searchAuthor = identified.author || meta.author;
   showLoading(true, 'Trying ' + SOURCE_LABELS[source] + '…');
   try {
     const params = new URLSearchParams({ source });
-    if (meta.title)          params.set('title', meta.title);
-    if (meta.author)         params.set('author', meta.author);
-    if (meta.google_books_id) params.set('google_books_id', meta.google_books_id);
+    if (searchTitle)  params.set('title', searchTitle);
+    if (searchAuthor) params.set('author', searchAuthor);
+    if (source === 'google' && meta.google_books_id) params.set('google_books_id', meta.google_books_id);
     const fresh = await GET('/api/books/metadata?' + params.toString());
     submit.metadata = { ...fresh, google_books_id: meta.google_books_id };
     currentMetaSource = source;
