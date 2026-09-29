@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from typing import List, Optional
@@ -31,19 +32,21 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="BookBuddy", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        logger.error("ANTHROPIC_API_KEY is not set — book identification and recommendations will fail.")
+    yield
+
+
+app = FastAPI(title="BookBuddy", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 VALID_RATINGS = {"love", "like", "neutral", "dislike", "hate"}
 VALID_READING_LEVELS = {"picture_book", "early_reader", "chapter_book", "middle_grade"}
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        logger.error("ANTHROPIC_API_KEY is not set — book identification and recommendations will fail.")
 
 
 # ---------------------------------------------------------------------------
@@ -202,6 +205,27 @@ def _confidence_threshold() -> float:
         return float(get_setting("confidence_threshold", "0.75"))
     except (TypeError, ValueError):
         return 0.75
+
+
+def _upsert_ratings(db: Session, book_id: int, ratings: List[RatingItem]):
+    for r in ratings:
+        existing = (
+            db.query(Rating)
+            .filter(Rating.book_id == book_id, Rating.child_id == r.child_id)
+            .first()
+        )
+        if existing:
+            existing.rating = r.rating
+            if r.date_read is not None:
+                existing.date_read = r.date_read
+            if r.notes is not None:
+                existing.notes = r.notes
+            if r.read_myself is not None:
+                existing.read_myself = r.read_myself
+        else:
+            db.add(Rating(book_id=book_id, child_id=r.child_id, rating=r.rating,
+                          date_read=r.date_read, notes=r.notes,
+                          read_myself=r.read_myself or False))
 
 
 def _require_api_key():
@@ -406,22 +430,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
             book.reading_level = data.reading_level
         if data.ratings and book.status == "wishlist":
             book.status = "library"
-        for r in data.ratings:
-            existing = db.query(Rating).filter(
-                Rating.book_id == book.id, Rating.child_id == r.child_id
-            ).first()
-            if existing:
-                existing.rating = r.rating
-                if r.date_read is not None:
-                    existing.date_read = r.date_read
-                if r.notes is not None:
-                    existing.notes = r.notes
-                if r.read_myself is not None:
-                    existing.read_myself = r.read_myself
-            else:
-                db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
-                              date_read=r.date_read, notes=r.notes,
-                              read_myself=r.read_myself or False))
+        _upsert_ratings(db, book.id, data.ratings)
         db.commit()
         return {"ok": True, "book_id": book.id, "duplicate": False}
 
@@ -472,25 +481,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
             book.status = "library"
         book.updated_at = datetime.utcnow()
 
-    # Upsert ratings
-    for r in data.ratings:
-        existing = (
-            db.query(Rating)
-            .filter(Rating.book_id == book.id, Rating.child_id == r.child_id)
-            .first()
-        )
-        if existing:
-            existing.rating = r.rating
-            if r.date_read is not None:
-                existing.date_read = r.date_read
-            if r.notes is not None:
-                existing.notes = r.notes
-            if r.read_myself is not None:
-                existing.read_myself = r.read_myself
-        else:
-            db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
-                          date_read=r.date_read, notes=r.notes,
-                          read_myself=r.read_myself or False))
+    _upsert_ratings(db, book.id, data.ratings)
 
     db.commit()
     return {"ok": True, "book_id": book.id, "duplicate": False}

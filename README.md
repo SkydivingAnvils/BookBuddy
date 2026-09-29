@@ -88,3 +88,14 @@ Back this file up regularly to keep your reading history. The `./data/` director
 # Simple backup example
 cp ./data/bookbuddy.db ./data/bookbuddy.db.backup-$(date +%Y%m%d)
 ```
+
+---
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+Tests use a temporary SQLite database and make no network calls. They also run automatically on GitHub for every push to `main` and every pull request.

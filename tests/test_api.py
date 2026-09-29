@@ -98,3 +98,17 @@ def test_confidence_threshold_setting_is_validated(client):
     assert client.put("/api/settings", json={"key": "confidence_threshold", "value": "abc"}).status_code == 400
     assert client.put("/api/settings", json={"key": "confidence_threshold", "value": "1.5"}).status_code == 400
     assert client.put("/api/settings", json={"key": "confidence_threshold", "value": "0.6"}).status_code == 200
+
+
+def test_submit_upserts_ratings_on_existing_book(client):
+    a = _child(client, "A")
+    placeholder = client.post("/api/books/submit", json={
+        "title": "P", "author": "Q", "ratings": [], "placeholder": True,
+    }).json()["book_id"]
+    for rating in ["like", "love"]:
+        client.post("/api/books/submit", json={
+            "title": "P", "author": "Q", "book_id": placeholder,
+            "ratings": [{"child_id": a, "rating": rating, "notes": "n"}],
+        })
+    ratings = client.get(f"/api/books/{placeholder}").json()["ratings"]
+    assert [(r["rating"], r["notes"]) for r in ratings.values()] == [("love", "n")]
