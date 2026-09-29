@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from .books_api import (
@@ -178,6 +179,31 @@ def _book_dict(book: Book, db: Session) -> dict:
     }
 
 
+def _same_book(title: str, author: Optional[str] = None):
+    """Case-insensitive exact match on title (and author, if given).
+
+    Uses lower() equality rather than ilike so % and _ in titles aren't wildcards.
+    """
+    conds = [func.lower(Book.title) == title.strip().lower()]
+    if author is not None:
+        conds.append(func.lower(Book.author) == author.strip().lower())
+    return conds
+
+
+def _find_by_title_author(db: Session, title: str, author: str) -> Optional[Book]:
+    """Match on title+author; fall back to title alone only when no author is known."""
+    if author:
+        return db.query(Book).filter(*_same_book(title, author)).first()
+    return db.query(Book).filter(*_same_book(title)).first()
+
+
+def _confidence_threshold() -> float:
+    try:
+        return float(get_setting("confidence_threshold", "0.75"))
+    except (TypeError, ValueError):
+        return 0.75
+
+
 def _require_api_key():
     if not os.getenv("ANTHROPIC_API_KEY"):
         raise HTTPException(
@@ -251,7 +277,7 @@ async def identify_book_endpoint(image: UploadFile = File(...)):
         logger.error("Identification error: %s", e)
         raise HTTPException(status_code=500, detail="Book identification failed. Please try again.")
 
-    threshold = float(get_setting("confidence_threshold", "0.75"))
+    threshold = _confidence_threshold()
     result["threshold"] = threshold
     result["above_threshold"] = float(result.get("confidence", 0)) >= threshold
     return result
@@ -334,7 +360,7 @@ def check_duplicate(title: str = "", author: str = "", google_books_id: str = ""
     if not book and title and author:
         book = (
             db.query(Book)
-            .filter(Book.title.ilike(title), Book.author.ilike(author))
+            .filter(*_same_book(title, author))
             .first()
         )
     if book:
@@ -406,7 +432,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
     if not book:
         book = (
             db.query(Book)
-            .filter(Book.title.ilike(data.title), Book.author.ilike(data.author))
+            .filter(*_same_book(data.title, data.author))
             .first()
         )
 
@@ -661,6 +687,13 @@ def get_all_settings(db: Session = Depends(get_db)):
 
 @app.put("/api/settings")
 def update_setting(data: SettingUpdate, db: Session = Depends(get_db)):
+    if data.key == "confidence_threshold":
+        try:
+            value = float(data.value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Confidence threshold must be a number.")
+        if not 0.0 <= value <= 1.0:
+            raise HTTPException(status_code=400, detail="Confidence threshold must be between 0 and 1.")
     setting = db.query(Setting).filter(Setting.key == data.key).first()
     if setting:
         setting.value = data.value
@@ -719,11 +752,7 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
         meta   = meta_by_idx.get(idx)
 
         try:
-            book = None
-            if author:
-                book = db.query(Book).filter(Book.title.ilike(title), Book.author.ilike(author)).first()
-            if not book:
-                book = db.query(Book).filter(Book.title.ilike(title)).first()
+            book = _find_by_title_author(db, title, author)
 
             if book:
                 duplicates += 1
@@ -1014,11 +1043,7 @@ async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(
         tags = (row.get("Tags") or "").strip() or None
 
         # Duplicate detection
-        existing_book = None
-        if author:
-            existing_book = db.query(Book).filter(Book.title.ilike(title), Book.author.ilike(author)).first()
-        if not existing_book:
-            existing_book = db.query(Book).filter(Book.title.ilike(title)).first()
+        existing_book = _find_by_title_author(db, title, author)
 
         is_duplicate = existing_book is not None
 

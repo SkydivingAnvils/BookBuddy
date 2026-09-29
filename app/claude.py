@@ -106,10 +106,12 @@ def get_recommendations(child_name: str, age: int, reading_history: list) -> lis
 
     response = client.messages.create(
         model=MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         messages=[{"role": "user", "content": prompt}],
     )
 
+    if response.stop_reason == "max_tokens":
+        logger.warning("Recommendations response hit max_tokens and may be truncated")
     try:
         result = _parse_json(response.content[0].text)
         return result if isinstance(result, list) else []

@@ -75,3 +75,26 @@ def test_bulk_import_handles_short_and_long_rows(client):
     body = r.json()
     assert body["imported"] == 2
     assert body["errors"] == []
+
+
+def test_duplicate_check_treats_wildcards_literally(client):
+    a = _child(client, "A")
+    _book(client, "100% Wolf", a)
+    r = client.get("/api/books/check-duplicate", params={"title": "1_0% Wolf", "author": "Author"})
+    assert r.json()["exists"] is False
+    r = client.get("/api/books/check-duplicate", params={"title": "100% wolf", "author": "author"})
+    assert r.json()["exists"] is True
+
+
+def test_csv_import_same_title_different_author_is_new_book(client):
+    a = _child(client, "A")
+    _book(client, "Frog", a)
+    r = client.post("/api/books/bulk", files={"file": ("x.csv", b"Title,Author\nFrog,Someone Else\n")})
+    assert r.json()["imported"] == 1
+    assert r.json()["duplicates"] == 0
+
+
+def test_confidence_threshold_setting_is_validated(client):
+    assert client.put("/api/settings", json={"key": "confidence_threshold", "value": "abc"}).status_code == 400
+    assert client.put("/api/settings", json={"key": "confidence_threshold", "value": "1.5"}).status_code == 400
+    assert client.put("/api/settings", json={"key": "confidence_threshold", "value": "0.6"}).status_code == 200
