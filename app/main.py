@@ -993,8 +993,7 @@ def admin_merge_books(data: AdminMerge, db: Session = Depends(get_db)):
             delete.ratings.remove(r)
             keep.ratings.append(r)
             keep_child_ids.add(r.child_id)
-        else:
-            db.delete(r)
+        # Conflicting ratings stay on the deleted book and go with it via the cascade
 
     db.flush()
     db.delete(delete)
