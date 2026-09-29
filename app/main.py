@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
@@ -10,12 +11,13 @@ from typing import List, Optional
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
+from . import backup
 from .books_api import (
     fetch_book_metadata, fetch_by_google_id, search_books,
     fetch_google_books_metadata, fetch_openlibrary_metadata,
@@ -38,12 +40,19 @@ async def lifespan(_app: FastAPI):
     init_db()
     if not os.getenv("ANTHROPIC_API_KEY"):
         logger.error("ANTHROPIC_API_KEY is not set — book identification and recommendations will fail.")
+    scheduler = backup.BackupScheduler()
+    scheduler.start()
     yield
+    scheduler.stop()
 
 
 app = FastAPI(title="BookBuddy", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
+REC_COUNT = 20
+REC_REQUEST_COUNT = 25     # ask for extra so filtering out owned books still leaves REC_COUNT
+REC_OWNED_LIMIT = 300
 
 VALID_RATINGS = {"love", "like", "neutral", "dislike", "hate"}
 VALID_READING_LEVELS = {"picture_book", "early_reader", "chapter_book", "middle_grade"}
@@ -226,6 +235,13 @@ def _upsert_ratings(db: Session, book_id: int, ratings: List[RatingItem]):
             db.add(Rating(book_id=book_id, child_id=r.child_id, rating=r.rating,
                           date_read=r.date_read, notes=r.notes,
                           read_myself=r.read_myself or False))
+
+
+def _title_key(title: str) -> str:
+    """Normalise a title for loose matching: case, punctuation and a leading article."""
+    t = re.sub(r"[^a-z0-9 ]", "", (title or "").lower())
+    t = re.sub(r"^(the|a|an) ", "", " ".join(t.split()))
+    return t
 
 
 def _require_api_key():
@@ -639,15 +655,35 @@ def recommendations(child_id: int, db: Session = Depends(get_db)):
                 "series": r.book.series,
             })
 
+    # Books already in the house (library or wishlist) that this child hasn't rated,
+    # so Claude doesn't suggest them. Most recent first, capped to bound prompt size.
+    rated_ids = {r.book_id for r in ratings}
+    owned = [
+        {"title": b.title, "author": b.author}
+        for b in db.query(Book).order_by(Book.created_at.desc()).limit(REC_OWNED_LIMIT + len(rated_ids))
+        if b.id not in rated_ids
+    ][:REC_OWNED_LIMIT]
+
     age = _age(child.birthday)
 
     try:
-        recs = get_recommendations(child.name, age, history)
+        recs = get_recommendations(child.name, age, history, owned=owned, count=REC_REQUEST_COUNT)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error("Recommendations error: %s", e)
         raise HTTPException(status_code=500, detail="Failed to generate recommendations. Please try again.")
+
+    # Claude doesn't always honour the exclusion list, so filter against every book we have
+    known = {_title_key(t) for (t,) in db.query(Book.title)}
+    seen: set = set()
+    filtered = []
+    for rec in recs:
+        key = _title_key(rec.get("title", ""))
+        if key and key not in known and key not in seen:
+            seen.add(key)
+            filtered.append(rec)
+    recs = filtered[:REC_COUNT]
 
     # Fetch covers concurrently
     def enrich(args):
@@ -803,6 +839,115 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
         "errors": errors,
         "total": len(rows),
     }
+
+
+# ---------------------------------------------------------------------------
+# Series
+# ---------------------------------------------------------------------------
+
+def _order_value(order: Optional[str]) -> Optional[float]:
+    try:
+        return float(order) if order not in (None, "") else None
+    except ValueError:
+        return None
+
+
+@app.get("/api/series")
+def list_series(child_id: Optional[int] = None, db: Session = Depends(get_db)):
+    """Group books by series, with read state and gaps.
+
+    With child_id, each series also gets next_up (the first owned book that child hasn't
+    read) and next_to_get (the first series number after the child's furthest-read book
+    that isn't in the house).
+    """
+    books = (
+        db.query(Book)
+        .filter(Book.series.isnot(None), Book.series != "")
+        .options(joinedload(Book.ratings).joinedload(Rating.child))
+        .all()
+    )
+
+    groups: dict = {}
+    for book in books:
+        key = book.series.strip().lower()
+        group = groups.setdefault(key, {"series": book.series.strip(), "books": []})
+        readers = sorted(r.child.name for r in book.ratings if r.child)
+        group["books"].append({
+            "id": book.id,
+            "title": book.title,
+            "author": book.author,
+            "cover_url": book.cover_url,
+            "series_order": book.series_order,
+            "status": book.status or "library",
+            "readers": readers,
+            "read": child_id is not None and any(r.child_id == child_id for r in book.ratings),
+        })
+
+    result = []
+    for group in groups.values():
+        entries = group["books"]
+        entries.sort(key=lambda b: (_order_value(b["series_order"]) is None,
+                                    _order_value(b["series_order"]) or 0, b["title"].lower()))
+        # Gaps are measured against books on the shelf; wishlisted ones still count as missing
+        orders = {_order_value(b["series_order"]) for b in entries if b["status"] == "library"} - {None}
+        whole = {int(o) for o in orders if o == int(o)}
+        missing = [n for n in range(1, max(whole) + 1) if n not in whole] if whole else []
+
+        group.update({
+            "owned_count": sum(b["status"] == "library" for b in entries),
+            "read_count": sum(b["read"] for b in entries),
+            "missing": missing,
+            "next_up": None,
+            "next_to_get": None,
+        })
+        if child_id is not None:
+            group["next_up"] = next(
+                (b for b in entries if b["status"] == "library" and not b["read"]), None)
+            read_orders = [_order_value(b["series_order"]) for b in entries if b["read"]]
+            read_orders = [o for o in read_orders if o is not None]
+            if read_orders and not group["next_up"]:
+                furthest = int(max(read_orders))
+                candidate = furthest + 1
+                while candidate in whole:
+                    candidate += 1
+                group["next_to_get"] = candidate
+        result.append(group)
+
+    # Series with something to do next come first, then alphabetical
+    result.sort(key=lambda g: (not (g["next_up"] or g["next_to_get"]), g["series"].lower()))
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Backups
+# ---------------------------------------------------------------------------
+
+@app.get("/api/backups")
+def get_backups():
+    return {
+        "enabled": backup.interval_hours() > 0,
+        "interval_hours": backup.interval_hours(),
+        "keep": backup.keep_count(),
+        "directory": backup.backup_dir(),
+        "backups": backup.list_backups(),
+    }
+
+
+@app.post("/api/backups", status_code=201)
+def create_backup():
+    try:
+        return backup.run_backup()
+    except Exception as e:
+        logger.error("Manual backup failed: %s", e)
+        raise HTTPException(status_code=500, detail=f"Backup failed: {e}")
+
+
+@app.get("/api/backups/{name}")
+def download_backup(name: str):
+    path = backup.backup_path(name)
+    if not path:
+        raise HTTPException(status_code=404, detail="Backup not found")
+    return FileResponse(path, media_type="application/octet-stream", filename=name)
 
 
 # ---------------------------------------------------------------------------

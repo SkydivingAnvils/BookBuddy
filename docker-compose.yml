@@ -13,4 +13,6 @@ services:
       - DATABASE_URL=sqlite:////data/bookbuddy.db
       - GOOGLE_BOOKS_API_KEY=${GOOGLE_BOOKS_API_KEY:-}
       - HARDCOVER_API_KEY=${HARDCOVER_API_KEY:-}
+      - BACKUP_INTERVAL_HOURS=${BACKUP_INTERVAL_HOURS:-24}
+      - BACKUP_KEEP=${BACKUP_KEEP:-14}
     restart: unless-stopped

@@ -50,6 +50,9 @@
             </select>
           </div>
           <div class="filter-row">
+            <button class="btn btn-outline btn-sm" id="lib-series-btn" onclick="showView('series')">📚 Series progress</button>
+          </div>
+          <div class="filter-row">
             <select id="lib-sort" onchange="loadLibrary()">
               <option value="date_desc">Newest first</option>
               <option value="date_asc">Oldest first</option>
@@ -260,6 +263,17 @@
         <div id="recs-results"></div>
       </div>
 
+      <!-- Series View -->
+      <div class="view hidden" id="view-series">
+        <div class="form-group">
+          <label for="series-child-select">Show progress for:</label>
+          <select id="series-child-select" onchange="loadSeries()">
+            <option value="">All children</option>
+          </select>
+        </div>
+        <div id="series-list"></div>
+      </div>
+
       <!-- Settings View -->
       <div class="view hidden" id="view-settings">
         <div class="settings-section">
@@ -300,6 +314,14 @@
               Export CSV
             </button>
           </div>
+        </div>
+        <div class="settings-section">
+          <h3>Backups</h3>
+          <p class="hint" id="backup-status">Loading…</p>
+          <div class="settings-actions-row">
+            <button class="btn btn-outline" onclick="runBackupNow()">Back up now</button>
+          </div>
+          <ul id="backup-list" class="backup-list"></ul>
         </div>
         <div class="settings-section">
           <h3>Children</h3>
