@@ -82,12 +82,21 @@ All book and rating data is stored in:
 ./data/bookbuddy.db
 ```
 
-Back this file up regularly to keep your reading history. The `./data/` directory is a Docker volume that persists across container restarts and updates.
+The `./data/` directory is a Docker volume that persists across container restarts and updates.
 
-```bash
-# Simple backup example
-cp ./data/bookbuddy.db ./data/bookbuddy.db.backup-$(date +%Y%m%d)
-```
+### Backups
+
+BookBuddy backs up the database automatically to `./data/backups/` — once at startup if no recent backup exists, then every 24 hours — and keeps the latest 14. You can also back up on demand and download any backup from **Settings → Backups**.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BACKUP_INTERVAL_HOURS` | `24` | Hours between backups; `0` turns automatic backups off |
+| `BACKUP_KEEP` | `14` | How many backups to keep |
+| `BACKUP_DIR` | `<database folder>/backups` | Where backups are written |
+
+Backups live on the same disk as the database, so for real safety copy `./data/backups/` somewhere else too (e.g. an Unraid backup share or cloud sync).
+
+To restore, stop the container, replace `./data/bookbuddy.db` with a backup file (and delete any `bookbuddy.db-wal` / `bookbuddy.db-shm` next to it), then start the container again.
 
 ---
 
