@@ -686,7 +686,7 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
     child_by_name = {c.name.lower(): c for c in children}
 
     reader = csv.DictReader(io.StringIO(text))
-    rows = [row for row in reader if row.get("Title", "").strip()]
+    rows = [row for row in reader if (row.get("Title") or "").strip()]
 
     if not rows:
         raise HTTPException(status_code=400, detail="No valid rows found. Make sure the CSV has a 'Title' column header.")
@@ -696,8 +696,8 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
     # Fetch metadata concurrently — I/O bound, safe to parallelise
     def fetch_for_row(args):
         idx, row = args
-        title = row.get("Title", "").strip()
-        author = row.get("Author", "").strip()
+        title = (row.get("Title") or "").strip()
+        author = (row.get("Author") or "").strip()
         return idx, (fetch_book_metadata(title, author) if title else None)
 
     meta_by_idx: dict = {}
@@ -712,10 +712,10 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
     errors: list = []
 
     for idx, row in enumerate(rows):
-        title  = row.get("Title",  "").strip()
-        author = row.get("Author", "").strip()
-        series = row.get("Series", "").strip() or None
-        tags   = row.get("Tags",   "").strip() or None
+        title  = (row.get("Title")  or "").strip()
+        author = (row.get("Author") or "").strip()
+        series = (row.get("Series") or "").strip() or None
+        tags   = (row.get("Tags")   or "").strip() or None
         meta   = meta_by_idx.get(idx)
 
         try:
@@ -756,6 +756,9 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
 
             # Ratings — match column headers to child names (case-insensitive)
             for col, val in row.items():
+                # Short rows yield None values; extra fields land under a None key
+                if not isinstance(col, str) or not isinstance(val, str):
+                    continue
                 child = child_by_name.get(col.strip().lower())
                 if child and val.strip().lower() in VALID_RATINGS:
                     existing = (
@@ -966,7 +969,9 @@ def admin_merge_books(data: AdminMerge, db: Session = Depends(get_db)):
     # Reassign ratings that don't conflict
     for r in list(delete.ratings):
         if r.child_id not in keep_child_ids:
-            r.book_id = data.keep_id
+            # Move via the relationship so the delete-orphan cascade doesn't take it
+            delete.ratings.remove(r)
+            keep.ratings.append(r)
             keep_child_ids.add(r.child_id)
         else:
             db.delete(r)
@@ -991,7 +996,7 @@ async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(
     child_names = [c.name for c in children]
 
     reader = csv.DictReader(io.StringIO(text))
-    raw_rows = [row for row in reader if row.get("Title", "").strip()]
+    raw_rows = [row for row in reader if (row.get("Title") or "").strip()]
 
     if not raw_rows:
         raise HTTPException(status_code=400, detail="No valid rows found. Make sure the CSV has a 'Title' column header.")
@@ -1003,10 +1008,10 @@ async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(
     duplicate_count = 0
 
     for row in raw_rows:
-        title = row.get("Title", "").strip()
-        author = row.get("Author", "").strip()
-        series = row.get("Series", "").strip() or None
-        tags = row.get("Tags", "").strip() or None
+        title = (row.get("Title") or "").strip()
+        author = (row.get("Author") or "").strip()
+        series = (row.get("Series") or "").strip() or None
+        tags = (row.get("Tags") or "").strip() or None
 
         # Duplicate detection
         existing_book = None
@@ -1020,6 +1025,8 @@ async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(
         # Collect ratings from child-named columns
         ratings: dict = {}
         for col, val in row.items():
+            if not isinstance(col, str) or not isinstance(val, str):
+                continue
             child = child_by_name.get(col.strip().lower())
             if child and val.strip().lower() in VALID_RATINGS:
                 ratings[child.name] = val.strip().lower()

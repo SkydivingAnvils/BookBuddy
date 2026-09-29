@@ -19,6 +19,4 @@ build/
 
 # macOS
 .DS_Store
-
-# Docker
-.dockerignore
+!.env.example

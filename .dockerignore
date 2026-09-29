@@ -1,0 +1,15 @@
+# Keep secrets, data and repo metadata out of the image
+.env
+*.env
+data/
+*.db
+*.db-shm
+*.db-wal
+.git/
+.gitignore
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+tests/
+.DS_Store
