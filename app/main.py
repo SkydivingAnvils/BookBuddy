@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date, datetime
 from typing import List, Optional
@@ -12,6 +13,7 @@ from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from .books_api import (
@@ -30,19 +32,21 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="BookBuddy", docs_url=None, redoc_url=None)
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    init_db()
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        logger.error("ANTHROPIC_API_KEY is not set — book identification and recommendations will fail.")
+    yield
+
+
+app = FastAPI(title="BookBuddy", docs_url=None, redoc_url=None, lifespan=lifespan)
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 VALID_RATINGS = {"love", "like", "neutral", "dislike", "hate"}
 VALID_READING_LEVELS = {"picture_book", "early_reader", "chapter_book", "middle_grade"}
-
-
-@app.on_event("startup")
-def startup():
-    init_db()
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        logger.error("ANTHROPIC_API_KEY is not set — book identification and recommendations will fail.")
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +182,52 @@ def _book_dict(book: Book, db: Session) -> dict:
     }
 
 
+def _same_book(title: str, author: Optional[str] = None):
+    """Case-insensitive exact match on title (and author, if given).
+
+    Uses lower() equality rather than ilike so % and _ in titles aren't wildcards.
+    """
+    conds = [func.lower(Book.title) == title.strip().lower()]
+    if author is not None:
+        conds.append(func.lower(Book.author) == author.strip().lower())
+    return conds
+
+
+def _find_by_title_author(db: Session, title: str, author: str) -> Optional[Book]:
+    """Match on title+author; fall back to title alone only when no author is known."""
+    if author:
+        return db.query(Book).filter(*_same_book(title, author)).first()
+    return db.query(Book).filter(*_same_book(title)).first()
+
+
+def _confidence_threshold() -> float:
+    try:
+        return float(get_setting("confidence_threshold", "0.75"))
+    except (TypeError, ValueError):
+        return 0.75
+
+
+def _upsert_ratings(db: Session, book_id: int, ratings: List[RatingItem]):
+    for r in ratings:
+        existing = (
+            db.query(Rating)
+            .filter(Rating.book_id == book_id, Rating.child_id == r.child_id)
+            .first()
+        )
+        if existing:
+            existing.rating = r.rating
+            if r.date_read is not None:
+                existing.date_read = r.date_read
+            if r.notes is not None:
+                existing.notes = r.notes
+            if r.read_myself is not None:
+                existing.read_myself = r.read_myself
+        else:
+            db.add(Rating(book_id=book_id, child_id=r.child_id, rating=r.rating,
+                          date_read=r.date_read, notes=r.notes,
+                          read_myself=r.read_myself or False))
+
+
 def _require_api_key():
     if not os.getenv("ANTHROPIC_API_KEY"):
         raise HTTPException(
@@ -251,7 +301,7 @@ async def identify_book_endpoint(image: UploadFile = File(...)):
         logger.error("Identification error: %s", e)
         raise HTTPException(status_code=500, detail="Book identification failed. Please try again.")
 
-    threshold = float(get_setting("confidence_threshold", "0.75"))
+    threshold = _confidence_threshold()
     result["threshold"] = threshold
     result["above_threshold"] = float(result.get("confidence", 0)) >= threshold
     return result
@@ -334,7 +384,7 @@ def check_duplicate(title: str = "", author: str = "", google_books_id: str = ""
     if not book and title and author:
         book = (
             db.query(Book)
-            .filter(Book.title.ilike(title), Book.author.ilike(author))
+            .filter(*_same_book(title, author))
             .first()
         )
     if book:
@@ -380,22 +430,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
             book.reading_level = data.reading_level
         if data.ratings and book.status == "wishlist":
             book.status = "library"
-        for r in data.ratings:
-            existing = db.query(Rating).filter(
-                Rating.book_id == book.id, Rating.child_id == r.child_id
-            ).first()
-            if existing:
-                existing.rating = r.rating
-                if r.date_read is not None:
-                    existing.date_read = r.date_read
-                if r.notes is not None:
-                    existing.notes = r.notes
-                if r.read_myself is not None:
-                    existing.read_myself = r.read_myself
-            else:
-                db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
-                              date_read=r.date_read, notes=r.notes,
-                              read_myself=r.read_myself or False))
+        _upsert_ratings(db, book.id, data.ratings)
         db.commit()
         return {"ok": True, "book_id": book.id, "duplicate": False}
 
@@ -406,7 +441,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
     if not book:
         book = (
             db.query(Book)
-            .filter(Book.title.ilike(data.title), Book.author.ilike(data.author))
+            .filter(*_same_book(data.title, data.author))
             .first()
         )
 
@@ -446,25 +481,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
             book.status = "library"
         book.updated_at = datetime.utcnow()
 
-    # Upsert ratings
-    for r in data.ratings:
-        existing = (
-            db.query(Rating)
-            .filter(Rating.book_id == book.id, Rating.child_id == r.child_id)
-            .first()
-        )
-        if existing:
-            existing.rating = r.rating
-            if r.date_read is not None:
-                existing.date_read = r.date_read
-            if r.notes is not None:
-                existing.notes = r.notes
-            if r.read_myself is not None:
-                existing.read_myself = r.read_myself
-        else:
-            db.add(Rating(book_id=book.id, child_id=r.child_id, rating=r.rating,
-                          date_read=r.date_read, notes=r.notes,
-                          read_myself=r.read_myself or False))
+    _upsert_ratings(db, book.id, data.ratings)
 
     db.commit()
     return {"ok": True, "book_id": book.id, "duplicate": False}
@@ -661,6 +678,13 @@ def get_all_settings(db: Session = Depends(get_db)):
 
 @app.put("/api/settings")
 def update_setting(data: SettingUpdate, db: Session = Depends(get_db)):
+    if data.key == "confidence_threshold":
+        try:
+            value = float(data.value)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Confidence threshold must be a number.")
+        if not 0.0 <= value <= 1.0:
+            raise HTTPException(status_code=400, detail="Confidence threshold must be between 0 and 1.")
     setting = db.query(Setting).filter(Setting.key == data.key).first()
     if setting:
         setting.value = data.value
@@ -686,7 +710,7 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
     child_by_name = {c.name.lower(): c for c in children}
 
     reader = csv.DictReader(io.StringIO(text))
-    rows = [row for row in reader if row.get("Title", "").strip()]
+    rows = [row for row in reader if (row.get("Title") or "").strip()]
 
     if not rows:
         raise HTTPException(status_code=400, detail="No valid rows found. Make sure the CSV has a 'Title' column header.")
@@ -696,8 +720,8 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
     # Fetch metadata concurrently — I/O bound, safe to parallelise
     def fetch_for_row(args):
         idx, row = args
-        title = row.get("Title", "").strip()
-        author = row.get("Author", "").strip()
+        title = (row.get("Title") or "").strip()
+        author = (row.get("Author") or "").strip()
         return idx, (fetch_book_metadata(title, author) if title else None)
 
     meta_by_idx: dict = {}
@@ -712,18 +736,14 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
     errors: list = []
 
     for idx, row in enumerate(rows):
-        title  = row.get("Title",  "").strip()
-        author = row.get("Author", "").strip()
-        series = row.get("Series", "").strip() or None
-        tags   = row.get("Tags",   "").strip() or None
+        title  = (row.get("Title")  or "").strip()
+        author = (row.get("Author") or "").strip()
+        series = (row.get("Series") or "").strip() or None
+        tags   = (row.get("Tags")   or "").strip() or None
         meta   = meta_by_idx.get(idx)
 
         try:
-            book = None
-            if author:
-                book = db.query(Book).filter(Book.title.ilike(title), Book.author.ilike(author)).first()
-            if not book:
-                book = db.query(Book).filter(Book.title.ilike(title)).first()
+            book = _find_by_title_author(db, title, author)
 
             if book:
                 duplicates += 1
@@ -756,6 +776,9 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
 
             # Ratings — match column headers to child names (case-insensitive)
             for col, val in row.items():
+                # Short rows yield None values; extra fields land under a None key
+                if not isinstance(col, str) or not isinstance(val, str):
+                    continue
                 child = child_by_name.get(col.strip().lower())
                 if child and val.strip().lower() in VALID_RATINGS:
                     existing = (
@@ -966,10 +989,11 @@ def admin_merge_books(data: AdminMerge, db: Session = Depends(get_db)):
     # Reassign ratings that don't conflict
     for r in list(delete.ratings):
         if r.child_id not in keep_child_ids:
-            r.book_id = data.keep_id
+            # Move via the relationship so the delete-orphan cascade doesn't take it
+            delete.ratings.remove(r)
+            keep.ratings.append(r)
             keep_child_ids.add(r.child_id)
-        else:
-            db.delete(r)
+        # Conflicting ratings stay on the deleted book and go with it via the cascade
 
     db.flush()
     db.delete(delete)
@@ -991,7 +1015,7 @@ async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(
     child_names = [c.name for c in children]
 
     reader = csv.DictReader(io.StringIO(text))
-    raw_rows = [row for row in reader if row.get("Title", "").strip()]
+    raw_rows = [row for row in reader if (row.get("Title") or "").strip()]
 
     if not raw_rows:
         raise HTTPException(status_code=400, detail="No valid rows found. Make sure the CSV has a 'Title' column header.")
@@ -1003,23 +1027,21 @@ async def admin_csv_preview(file: UploadFile = File(...), db: Session = Depends(
     duplicate_count = 0
 
     for row in raw_rows:
-        title = row.get("Title", "").strip()
-        author = row.get("Author", "").strip()
-        series = row.get("Series", "").strip() or None
-        tags = row.get("Tags", "").strip() or None
+        title = (row.get("Title") or "").strip()
+        author = (row.get("Author") or "").strip()
+        series = (row.get("Series") or "").strip() or None
+        tags = (row.get("Tags") or "").strip() or None
 
         # Duplicate detection
-        existing_book = None
-        if author:
-            existing_book = db.query(Book).filter(Book.title.ilike(title), Book.author.ilike(author)).first()
-        if not existing_book:
-            existing_book = db.query(Book).filter(Book.title.ilike(title)).first()
+        existing_book = _find_by_title_author(db, title, author)
 
         is_duplicate = existing_book is not None
 
         # Collect ratings from child-named columns
         ratings: dict = {}
         for col, val in row.items():
+            if not isinstance(col, str) or not isinstance(val, str):
+                continue
             child = child_by_name.get(col.strip().lower())
             if child and val.strip().lower() in VALID_RATINGS:
                 ratings[child.name] = val.strip().lower()

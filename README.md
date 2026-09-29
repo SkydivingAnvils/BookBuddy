@@ -26,7 +26,8 @@ cd bookbuddy
 cp .env.example .env
 
 # 3. Edit .env and paste your Anthropic API key
-#    (Optional: add a Google Books API key for higher rate limits)
+#    (Optional: add a Google Books API key for higher rate limits,
+#     and a Hardcover API key to enable Hardcover as a metadata source)
 nano .env
 
 # 4. Start the container
@@ -57,6 +58,7 @@ If running on the same machine: `http://localhost:7842`
    - **Volume Mapping:** Host `/mnt/user/appdata/bookbuddy` → Container `/data`
    - **Variable:** `ANTHROPIC_API_KEY` → your key
    - **Variable (optional):** `GOOGLE_BOOKS_API_KEY` → your key
+   - **Variable (optional):** `HARDCOVER_API_KEY` → your key
    - **Variable:** `DATABASE_URL` → `sqlite:////data/bookbuddy.db`
 3. Click **Apply**
 
@@ -86,3 +88,14 @@ Back this file up regularly to keep your reading history. The `./data/` director
 # Simple backup example
 cp ./data/bookbuddy.db ./data/bookbuddy.db.backup-$(date +%Y%m%d)
 ```
+
+---
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest tests
+```
+
+Tests use a temporary SQLite database and make no network calls. They also run automatically on GitHub for every push to `main` and every pull request.

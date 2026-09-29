@@ -1,8 +1,11 @@
-import json
 import os
 import logging
+import re
 from typing import Optional
 import httpx
+from anthropic import Anthropic
+
+from .claude import _parse_json
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,6 @@ def _infer_reading_level(categories: list) -> Optional[str]:
 
 def _parse_ol_series(series_list: list):
     """Parse Open Library series list like ['Harry Potter #3', 'Harry Potter'] into (name, order)."""
-    import re
     for entry in (series_list or []):
         m = re.search(r'#\s*(\d+(?:\.\d+)?)', entry)
         if m:
@@ -46,7 +48,6 @@ def _parse_ol_series(series_list: list):
 
 def _parse_series_from_subtitle(subtitle: str):
     """Extract series name and order from a subtitle like 'Harry Potter, Book 3'."""
-    import re
     if not subtitle:
         return None, None
     # Patterns: "Book 3", "#3", "Volume 3", "Vol. 3", "Part 3"
@@ -101,6 +102,28 @@ def _extract_google_volume(item: dict) -> dict:
     }
 
 
+def _extract_ol_doc(doc: dict, title: str = "", author: str = "", genre_limit: int = 5) -> dict:
+    cover_id = doc.get("cover_i")
+    isbn_list = doc.get("isbn", [])
+    ol_authors = doc.get("author_name", [])
+    ol_genres = doc.get("subject", [])[:genre_limit]
+    series_name, series_order = _parse_ol_series(doc.get("series", []))
+    return {
+        "google_books_id": "",
+        "title": doc.get("title", title),
+        "author": ", ".join(ol_authors[:2]) if ol_authors else author,
+        "isbn": next((i for i in isbn_list if len(i) == 13), isbn_list[0] if isbn_list else ""),
+        "cover_url": f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else "",
+        "description": "",
+        "published_date": str(doc.get("first_publish_year", "")),
+        "page_count": doc.get("number_of_pages_median"),
+        "genres": ol_genres,
+        "reading_level": _infer_reading_level(ol_genres),
+        "series": series_name,
+        "series_order": series_order,
+    }
+
+
 def search_open_library(query: str, limit: int = 10) -> list:
     """Search Open Library by free-text query."""
     try:
@@ -108,34 +131,7 @@ def search_open_library(query: str, limit: int = 10) -> list:
             r = client.get(OPEN_LIBRARY_SEARCH, params={"q": query, "limit": limit})
             r.raise_for_status()
             docs = r.json().get("docs", [])
-            results = []
-            for doc in docs:
-                cover_id = doc.get("cover_i")
-                cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else ""
-                isbn_list = doc.get("isbn", [])
-                isbn = next((i for i in isbn_list if len(i) == 13), isbn_list[0] if isbn_list else "")
-                ol_authors = doc.get("author_name", [])
-                title = doc.get("title", "")
-                if not title:
-                    continue
-                ol_genres = doc.get("subject", [])[:3]
-                ol_series = doc.get("series", [])
-                series_name, series_order = _parse_ol_series(ol_series)
-                results.append({
-                    "google_books_id": "",
-                    "title": title,
-                    "author": ", ".join(ol_authors[:2]) if ol_authors else "",
-                    "isbn": isbn,
-                    "cover_url": cover_url,
-                    "description": "",
-                    "published_date": str(doc.get("first_publish_year", "")),
-                    "page_count": doc.get("number_of_pages_median"),
-                    "genres": ol_genres,
-                    "reading_level": _infer_reading_level(ol_genres),
-                    "series": series_name,
-                    "series_order": series_order,
-                })
-            return results
+            return [_extract_ol_doc(doc, genre_limit=3) for doc in docs if doc.get("title")]
     except Exception as e:
         logger.error("Open Library search error: %s", e)
         return []
@@ -179,57 +175,8 @@ def fetch_by_google_id(google_books_id: str) -> Optional[dict]:
 
 
 def fetch_book_metadata(title: str, author: str = "") -> Optional[dict]:
-    # Try Google Books first
-    query = f"intitle:{title}"
-    if author:
-        query += f"+inauthor:{author}"
-    params = {"q": query, "maxResults": 1, **_google_params()}
-    try:
-        with httpx.Client(timeout=TIMEOUT) as client:
-            r = client.get(GOOGLE_BOOKS_BASE, params=params)
-            r.raise_for_status()
-            items = r.json().get("items", [])
-            if items:
-                return _extract_google_volume(items[0])
-    except Exception as e:
-        logger.error("Google Books metadata fetch error: %s", e)
-
-    # Fall back to Open Library
-    try:
-        with httpx.Client(timeout=TIMEOUT) as client:
-            r = client.get(OPEN_LIBRARY_SEARCH, params={"title": title, "author": author, "limit": 1})
-            r.raise_for_status()
-            docs = r.json().get("docs", [])
-            if docs:
-                doc = docs[0]
-                cover_id = doc.get("cover_i")
-                cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else ""
-
-                isbn_list = doc.get("isbn", [])
-                isbn = next((i for i in isbn_list if len(i) == 13), isbn_list[0] if isbn_list else "")
-
-                ol_authors = doc.get("author_name", [])
-                ol_genres = doc.get("subject", [])[:5]
-                ol_series = doc.get("series", [])
-                series_name, series_order = _parse_ol_series(ol_series)
-                return {
-                    "google_books_id": "",
-                    "title": doc.get("title", title),
-                    "author": ", ".join(ol_authors[:2]) if ol_authors else author,
-                    "isbn": isbn,
-                    "cover_url": cover_url,
-                    "description": "",
-                    "published_date": str(doc.get("first_publish_year", "")),
-                    "page_count": doc.get("number_of_pages_median"),
-                    "genres": ol_genres,
-                    "reading_level": _infer_reading_level(ol_genres),
-                    "series": series_name,
-                    "series_order": series_order,
-                }
-    except Exception as e:
-        logger.error("Open Library metadata fetch error: %s", e)
-
-    return None
+    """Google Books first, falling back to Open Library."""
+    return fetch_google_books_metadata(title, author) or fetch_openlibrary_metadata(title, author)
 
 
 # ---------------------------------------------------------------------------
@@ -258,31 +205,7 @@ def fetch_openlibrary_metadata(title: str, author: str = "") -> Optional[dict]:
             r = client.get(OPEN_LIBRARY_SEARCH, params={"title": title, "author": author, "limit": 1})
             r.raise_for_status()
             docs = r.json().get("docs", [])
-            if not docs:
-                return None
-            doc = docs[0]
-            cover_id = doc.get("cover_i")
-            cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-M.jpg" if cover_id else ""
-            isbn_list = doc.get("isbn", [])
-            isbn = next((i for i in isbn_list if len(i) == 13), isbn_list[0] if isbn_list else "")
-            ol_authors = doc.get("author_name", [])
-            ol_genres = doc.get("subject", [])[:5]
-            ol_series = doc.get("series", [])
-            series_name, series_order = _parse_ol_series(ol_series)
-            return {
-                "google_books_id": "",
-                "title": doc.get("title", title),
-                "author": ", ".join(ol_authors[:2]) if ol_authors else author,
-                "isbn": isbn,
-                "cover_url": cover_url,
-                "description": "",
-                "published_date": str(doc.get("first_publish_year", "")),
-                "page_count": doc.get("number_of_pages_median"),
-                "genres": ol_genres,
-                "reading_level": _infer_reading_level(ol_genres),
-                "series": series_name,
-                "series_order": series_order,
-            }
+            return _extract_ol_doc(docs[0], title, author) if docs else None
     except Exception as e:
         logger.error("Open Library explicit fetch error: %s", e)
         return None
@@ -370,10 +293,6 @@ def fetch_hardcover_metadata(title: str, author: str = "") -> Optional[dict]:
 # ---------------------------------------------------------------------------
 
 def fetch_metadata_from_claude(title: str, author: str) -> Optional[dict]:
-    try:
-        import anthropic
-    except ImportError:
-        return None
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         return None
@@ -391,17 +310,13 @@ def fetch_metadata_from_claude(title: str, author: str) -> Optional[dict]:
     )
 
     try:
-        client = anthropic.Anthropic(api_key=api_key)
+        client = Anthropic(api_key=api_key)
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",
             max_tokens=512,
             messages=[{"role": "user", "content": prompt}],
         )
-        text = response.content[0].text.strip()
-        if text.startswith("```"):
-            parts = text.split("```")
-            text = parts[1].lstrip("json").strip() if len(parts) > 1 else text
-        data = json.loads(text)
+        data = _parse_json(response.content[0].text)
         return {
             "google_books_id": "",
             "title": data.get("title") or title,
