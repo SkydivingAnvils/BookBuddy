@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path}/test.db")
+    monkeypatch.setenv("BACKUP_INTERVAL_HOURS", "0")
     # database.py reads DATABASE_URL at import time, so import fresh per test
     for mod in [m for m in sys.modules if m == "app" or m.startswith("app.")]:
         del sys.modules[mod]

@@ -65,7 +65,8 @@ def identify_book(image_data: bytes, media_type: str = "image/jpeg") -> dict:
         return {"title": "", "author": "", "confidence": 0.0}
 
 
-def get_recommendations(child_name: str, age: int, reading_history: list) -> list:
+def get_recommendations(child_name: str, age: int, reading_history: list,
+                        owned: list = None, count: int = 20) -> list:
     client = _client()
 
     history_lines = "\n".join(
@@ -93,12 +94,20 @@ def get_recommendations(child_name: str, age: int, reading_history: list) -> lis
             "they rate highly, the next book in that series is a great suggestion."
         )
 
+    owned_note = ""
+    if owned:
+        owned_lines = "\n".join(f'- "{b["title"]}" by {b["author"]}' for b in owned)
+        owned_note = (
+            f"\n\nThe family already owns or has wishlisted these books, so do NOT suggest them "
+            f"(a next book in one of these series is fine if not listed):\n{owned_lines}"
+        )
+
     prompt = (
         f"You are a children's book recommendation assistant. "
         f"The child's name is {child_name} and they are {age} years old. "
         f"Here is their reading history with ratings:\n{history_lines}"
-        f"{series_note}\n\n"
-        f"Based on their preferences and age, suggest 20 books they haven't read yet. "
+        f"{series_note}{owned_note}\n\n"
+        f"Based on their preferences and age, suggest {count} books they haven't read yet. "
         f"Return JSON only: an array of objects each with fields: "
         f"title, author, reason (one sentence, why this suits this child based on their history). "
         f"No other text."

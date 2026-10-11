@@ -273,6 +273,8 @@ async function showView(name) {
   // Hide rating filter for wishlist (no ratings on wish items)
   const ratingFilter = document.getElementById('lib-rating-filter');
   if (ratingFilter) ratingFilter.closest('.filter-row').style.display = name === 'wishlist' ? 'none' : '';
+  const seriesBtn = document.getElementById('lib-series-btn');
+  if (seriesBtn) seriesBtn.closest('.filter-row').style.display = name === 'wishlist' ? 'none' : '';
 
   // Per-view init
   switch (name) {
@@ -296,7 +298,11 @@ async function showView(name) {
       break;
     case 'settings':
       setHeader('⚙️ Settings', false);
-      await loadSettings();
+      await Promise.all([loadSettings(), loadBackups()]);
+      break;
+    case 'series':
+      setHeader('📚 Series', true);
+      await initSeries();
       break;
     case 'profiles':
       setHeader('Children', true);
@@ -852,23 +858,43 @@ async function runIdentify() {
 
 function confirmIdentification() {
   if (!submit.identified) return;
-  fetchMetadata(submit.identified.title || '', submit.identified.author || '', '');
+  fetchMetadata(submit.identified.title || '', submit.identified.author || '', '', 'auto', submit.identified.isbn || '');
 }
 
 function showIdentifyResult(result) {
   const area = document.getElementById('identify-result-area');
   const pct = Math.round((result.confidence || 0) * 100);
   const barColor = result.above_threshold ? 'var(--success)' : 'var(--accent)';
+  const fromBarcode = result.source === 'barcode';
+  const barcodeBadge = result.isbn
+    ? `<div class="identify-barcode">📷 ${fromBarcode && result.title ? 'Read from barcode' : 'Barcode found'} · ISBN ${esc(result.isbn)}</div>`
+    : '';
+
+  if (fromBarcode && !result.title) {
+    area.innerHTML = `
+      <div class="warning-banner">
+        ⚠️ We read the barcode (ISBN ${esc(result.isbn)}) but couldn't find that book in Google Books or Open Library.
+        Search for it or enter it below and the ISBN will be kept.
+      </div>
+      <div class="fix-action-row">
+        <button class="btn btn-primary" onclick="showFixSearch()">🔍 Search</button>
+        <button class="btn btn-outline" onclick="showManualEntry()">✏️ Enter Manually</button>
+      </div>`;
+    document.getElementById('fix-search-panel').classList.add('hidden');
+    document.getElementById('manual-entry-panel').classList.add('hidden');
+    return;
+  }
 
   const cardHtml = `
     <div class="identify-card">
+      ${barcodeBadge}
       <div class="identify-card-title">${esc(result.title || 'Unknown title')}</div>
       <div class="identify-card-author">${esc(result.author || 'Unknown author')}</div>
       <div class="confidence-bar-wrap">
         <div class="confidence-bar-track">
           <div class="confidence-bar-fill" style="width:${pct}%;background:${barColor}"></div>
         </div>
-        <div class="confidence-label">${pct}% sure</div>
+        <div class="confidence-label">${fromBarcode ? 'Exact match' : pct + '% sure'}</div>
       </div>
     </div>`;
 
@@ -980,12 +1006,13 @@ async function loadAvailableSources() {
   try { availableSources = await GET('/api/metadata-sources'); } catch (_) {}
 }
 
-async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
+async function fetchMetadata(title, author, googleBooksId, source = 'auto', isbn = '') {
   showLoading(true, 'Fetching book details…');
   try {
     const params = new URLSearchParams();
     if (googleBooksId) params.set('google_books_id', googleBooksId);
     else { if (title) params.set('title', title); if (author) params.set('author', author); }
+    if (isbn) params.set('isbn', isbn);
     if (source !== 'auto') params.set('source', source);
 
     const [meta, dupCheck] = await Promise.all([
@@ -993,6 +1020,8 @@ async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
       GET('/api/books/check-duplicate?' + params.toString()),
     ]);
 
+    // A scanned barcode is exact, even when the user had to find the book by search
+    if (submit.identified?.isbn) meta.isbn = submit.identified.isbn;
     submit.metadata = meta;
     submit.isDuplicate = dupCheck.exists;
     submit.existingBookId = dupCheck.book_id;
@@ -1025,8 +1054,10 @@ async function refetchMetadata(source) {
     if (searchTitle)  params.set('title', searchTitle);
     if (searchAuthor) params.set('author', searchAuthor);
     if (source === 'google' && meta.google_books_id) params.set('google_books_id', meta.google_books_id);
+    if (identified.isbn) params.set('isbn', identified.isbn);
     const fresh = await GET('/api/books/metadata?' + params.toString());
-    submit.metadata = { ...fresh, google_books_id: meta.google_books_id };
+    // A scanned ISBN is exact, so it wins over whichever edition a source returned
+    submit.metadata = { ...fresh, google_books_id: meta.google_books_id, isbn: identified.isbn || fresh.isbn };
     currentMetaSource = source;
     renderMetadataCard(submit.metadata);
     showToast(SOURCE_LABELS[source] + ' metadata loaded', 'success');
@@ -1494,6 +1525,125 @@ async function readRec(index) {
     // Save to library as placeholder — user can rate later from Library tab
     await _savePlaceholder();
     showToast(`"${rec.title}" saved — rate it anytime from Library`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Series
+// ---------------------------------------------------------------------------
+
+async function initSeries() {
+  const sel = document.getElementById('series-child-select');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All children</option>' +
+    allChildren.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
+  sel.value = current;
+  await loadSeries();
+}
+
+async function loadSeries() {
+  const childId = document.getElementById('series-child-select').value;
+  const list = document.getElementById('series-list');
+  try {
+    const series = await GET('/api/series' + (childId ? '?child_id=' + childId : ''));
+    list.innerHTML = series.length
+      ? series.map(s => renderSeriesCard(s, !!childId)).join('')
+      : `<div class="empty-state"><div class="empty-icon">📚</div><h3>No series yet</h3>
+           <p>Books with a series name (set when adding a book, or in book details) show up here.</p></div>`;
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function renderSeriesCard(s, perChild) {
+  const books = s.books.map(b => {
+    const order = b.series_order ? `#${esc(b.series_order)}` : '–';
+    const state = b.status === 'wishlist' ? 'wishlist'
+      : perChild ? (b.read ? 'read' : 'unread')
+      : (b.readers.length ? 'read' : 'unread');
+    const note = b.status === 'wishlist' ? '📋 wishlist'
+      : perChild ? (b.read ? '✓ read' : '')
+      : b.readers.map(esc).join(', ');
+    return `
+      <li class="series-book series-book-${state}" onclick="openBookDetail(${b.id})">
+        <span class="series-order">${order}</span>
+        <span class="series-book-title">${esc(b.title)}</span>
+        <span class="series-book-note">${note}</span>
+      </li>`;
+  }).join('');
+
+  let next = '';
+  if (s.next_up) {
+    next = `<div class="series-next"><span>Next up: <strong>${esc(s.next_up.title)}</strong>${
+      s.next_up.series_order ? ` (#${esc(s.next_up.series_order)})` : ''} — already on the shelf</span></div>`;
+  } else if (s.next_to_get) {
+    next = `<div class="series-next"><span>Next to get: <strong>#${s.next_to_get}</strong></span>
+      <button class="btn btn-outline btn-sm" data-series="${esc(s.series)}" data-number="${s.next_to_get}"
+        onclick="findSeriesBook(this.dataset.series, this.dataset.number)">Find it</button></div>`;
+  }
+  const missing = s.missing.length
+    ? `<div class="hint">Not on the shelf: ${s.missing.map(n => '#' + n).join(', ')}</div>` : '';
+  const progress = perChild ? `${s.read_count} read · ` : '';
+
+  return `
+    <div class="series-card">
+      <div class="series-card-head">
+        <h3>${esc(s.series)}</h3>
+        <span class="hint">${progress}${s.owned_count} owned</span>
+      </div>
+      ${next}
+      <ul class="series-books">${books}</ul>
+      ${missing}
+    </div>`;
+}
+
+async function findSeriesBook(series, number) {
+  // Reuse the Add Book title search, prefilled with the series and number
+  await showView('submit');
+  switchSubmitMode('search');
+  const input = document.getElementById('title-search-input');
+  if (input) {
+    input.value = `${series} ${number}`;
+    runTitleSearch();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
+
+function formatBytes(n) {
+  return n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+}
+
+async function loadBackups() {
+  const status = document.getElementById('backup-status');
+  const list = document.getElementById('backup-list');
+  try {
+    const info = await GET('/api/backups');
+    const latest = info.backups[0];
+    status.textContent = (info.enabled
+      ? `Automatic backup every ${info.interval_hours} h, keeping the latest ${info.keep}. `
+      : 'Automatic backups are off (BACKUP_INTERVAL_HOURS=0). ')
+      + (latest ? `Last backup: ${new Date(latest.created_at).toLocaleString()}.` : 'No backups yet.');
+    list.innerHTML = info.backups.map(b => `
+      <li><a href="/api/backups/${encodeURIComponent(b.name)}" download>${esc(b.name)}</a>
+        <span class="hint">${formatBytes(b.size)}</span></li>`).join('');
+  } catch (e) {
+    status.textContent = 'Could not load backup status: ' + e.message;
+  }
+}
+
+async function runBackupNow() {
+  showLoading(true, 'Backing up…');
+  try {
+    await POST('/api/backups');
+    showToast('Backup saved', 'success');
+    await loadBackups();
   } catch (e) {
     showToast(e.message, 'error');
   } finally {
