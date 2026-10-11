@@ -10,6 +10,18 @@ When you add a book, BookBuddy first looks for an ISBN barcode in the photo. If 
 - Only book barcodes (ISBNs starting 978 or 979) are used, so library stickers and price barcodes are ignored.
 - It works over plain `http://` on your home network, because it reads the photo you take rather than a live camera feed.
 
+### Series tracker
+
+**Library → 📚 Series progress** shows each series, which books each child has read, and what's next.
+
+- **Look up full series** asks Claude for every book in the series, so you see the titles you don't have yet, not just gaps in the numbers. The list is saved; tap *refresh* to look again. Lists can be wrong for obscure series, so check before buying.
+- **+ Wishlist** on a missing book adds it to the wishlist with its cover and details.
+- **Next in a series they like** appears on the Recommendations screen when you pick a child: the next book in any series they rated *love* or *like*. It doesn't call Claude.
+- **Find series for other books** asks Claude which of your books (up to 40 at a time) belong to a series. Nothing is saved until you tick the suggestions you agree with.
+- **Rename / merge** renames a series on all its books. Type an existing series name to merge the two. Names that differ only in "&"/"and", "The" or a trailing "Series" are grouped automatically.
+
+Looking up lists and suggestions needs `ANTHROPIC_API_KEY`; everything else works without it.
+
 ---
 
 ## Prerequisites

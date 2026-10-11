@@ -58,6 +58,18 @@ class Rating(Base):
     child = relationship("Child", back_populates="ratings")
 
 
+class SeriesCatalog(Base):
+    """Cached full book list for a series, so the tracker knows titles we don't own."""
+    __tablename__ = "series_catalog"
+
+    key = Column(String, primary_key=True)        # series.series_key(name)
+    name = Column(String, nullable=False)
+    books = Column(Text, nullable=False)          # JSON [{"order": "1", "title": ..., "author": ...}]
+    complete = Column(Boolean, default=True)      # False when the source said the list may be partial
+    source = Column(String, nullable=True)
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 
