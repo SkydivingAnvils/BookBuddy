@@ -1412,8 +1412,9 @@ async function initRecommendations() {
 }
 
 function onRecsChildChange() {
-  document.getElementById('recs-generate-btn').disabled =
-    !document.getElementById('recs-child-select').value;
+  const childId = document.getElementById('recs-child-select').value;
+  document.getElementById('recs-generate-btn').disabled = !childId;
+  loadSeriesNext(childId);
 }
 
 async function generateRecommendations(force = false) {
@@ -1536,6 +1537,9 @@ async function readRec(index) {
 // Series
 // ---------------------------------------------------------------------------
 
+// Series data from the last load; buttons refer to it by index so no strings go in onclick
+let lastSeries = [];
+
 async function initSeries() {
   const sel = document.getElementById('series-child-select');
   const current = sel.value;
@@ -1549,19 +1553,28 @@ async function loadSeries() {
   const childId = document.getElementById('series-child-select').value;
   const list = document.getElementById('series-list');
   try {
-    const series = await GET('/api/series' + (childId ? '?child_id=' + childId : ''));
-    list.innerHTML = series.length
-      ? series.map(s => renderSeriesCard(s, !!childId)).join('')
+    lastSeries = await GET('/api/series' + (childId ? '?child_id=' + childId : ''));
+    list.innerHTML = lastSeries.length
+      ? lastSeries.map((s, i) => renderSeriesCard(s, i, !!childId)).join('')
       : `<div class="empty-state"><div class="empty-icon">📚</div><h3>No series yet</h3>
-           <p>Books with a series name (set when adding a book, or in book details) show up here.</p></div>`;
+           <p>Books with a series name show up here. Tap <strong>Find series for other books</strong>
+           above to fill them in automatically.</p></div>`;
   } catch (e) {
     showToast(e.message, 'error');
   }
 }
 
-function renderSeriesCard(s, perChild) {
-  const books = s.books.map(b => {
+function renderSeriesCard(s, i, perChild) {
+  const books = s.books.map((b, j) => {
     const order = b.series_order ? `#${esc(b.series_order)}` : '–';
+    if (b.status === 'missing') {
+      return `
+        <li class="series-book series-book-missing">
+          <span class="series-order">${order}</span>
+          <span class="series-book-title">${esc(b.title)}</span>
+          <button class="btn btn-outline btn-xs" onclick="wantSeriesBook(${i}, ${j})">+ Wishlist</button>
+        </li>`;
+    }
     const state = b.status === 'wishlist' ? 'wishlist'
       : perChild ? (b.read ? 'read' : 'unread')
       : (b.readers.length ? 'read' : 'unread');
@@ -1580,35 +1593,226 @@ function renderSeriesCard(s, perChild) {
   if (s.next_up) {
     next = `<div class="series-next"><span>Next up: <strong>${esc(s.next_up.title)}</strong>${
       s.next_up.series_order ? ` (#${esc(s.next_up.series_order)})` : ''} — already on the shelf</span></div>`;
-  } else if (s.next_to_get) {
-    next = `<div class="series-next"><span>Next to get: <strong>#${s.next_to_get}</strong></span>
-      <button class="btn btn-outline btn-sm" data-series="${esc(s.series)}" data-number="${s.next_to_get}"
-        onclick="findSeriesBook(this.dataset.series, this.dataset.number)">Find it</button></div>`;
+  } else if (s.next_to_get != null) {
+    const label = s.next_to_get_title
+      ? `<strong>${esc(s.next_to_get_title)}</strong> (#${s.next_to_get})` : `<strong>#${s.next_to_get}</strong>`;
+    const action = s.next_to_get_status === 'wishlist'
+      ? `<span class="series-pill">📋 On wishlist</span>`
+      : s.next_to_get_title
+        ? `<button class="btn btn-outline btn-sm" onclick="wantNextInSeries(${i})">+ Wishlist</button>`
+        : `<button class="btn btn-outline btn-sm" onclick="findSeriesBook(${i})">Find it</button>`;
+    next = `<div class="series-next"><span>Next to get: ${label}</span>${action}</div>`;
+  } else if (s.finished) {
+    next = `<div class="series-next"><span>🎉 Read the whole series!</span></div>`;
   }
-  const missing = s.missing.length
+
+  // Without a full list we can only show gaps between numbers we own
+  const missing = !s.total && s.missing.length
     ? `<div class="hint">Not on the shelf: ${s.missing.map(n => '#' + n).join(', ')}</div>` : '';
-  const progress = perChild ? `${s.read_count} read · ` : '';
+  const counts = [
+    perChild ? `${s.read_count}${s.total ? ' of ' + s.total : ''} read` : null,
+    `${s.owned_count}${s.total && !perChild ? ' of ' + s.total : ''} owned`,
+  ].filter(Boolean).join(' · ');
+  const listAction = s.catalog
+    ? `<span class="hint">Full list${s.catalog.complete ? '' : ' (may be incomplete)'} ·
+         <a href="#" onclick="event.preventDefault();lookupSeriesList(${i})">refresh</a></span>`
+    : `<button class="btn btn-outline btn-sm" onclick="lookupSeriesList(${i})">📖 Look up full series</button>`;
 
   return `
     <div class="series-card">
       <div class="series-card-head">
         <h3>${esc(s.series)}</h3>
-        <span class="hint">${progress}${s.owned_count} owned</span>
+        <span class="hint">${counts}</span>
       </div>
       ${next}
       <ul class="series-books">${books}</ul>
       ${missing}
+      <div class="series-card-foot">
+        ${listAction}
+        <a href="#" class="series-rename" onclick="event.preventDefault();renameSeries(${i})">Rename / merge</a>
+      </div>
     </div>`;
 }
 
-async function findSeriesBook(series, number) {
+async function lookupSeriesList(i) {
+  const s = lastSeries[i];
+  if (!s) return;
+  showLoading(true, `Looking up every ${s.series} book…`);
+  try {
+    const r = await POST('/api/series/catalog', { name: s.series });
+    showToast(`Found ${r.count} books in ${s.series}`, 'success');
+    await loadSeries();
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function addSeriesBookToWishlist(series, title, author, order) {
+  showLoading(true, 'Adding to wishlist…');
+  try {
+    const r = await POST('/api/series/want', { series, title, author: author || '', series_order: order || null });
+    showToast(r.duplicate ? `"${r.title}" is already in your books` : `"${r.title}" added to wishlist`,
+      r.duplicate ? 'warning' : 'success');
+    return true;
+  } catch (e) {
+    showToast(e.message, 'error');
+    return false;
+  } finally {
+    showLoading(false);
+  }
+}
+
+async function wantSeriesBook(i, j) {
+  const s = lastSeries[i], b = s?.books[j];
+  if (!b) return;
+  if (await addSeriesBookToWishlist(s.series, b.title, b.author, b.series_order)) await loadSeries();
+}
+
+async function wantNextInSeries(i) {
+  const s = lastSeries[i];
+  if (!s?.next_to_get_title) return;
+  const b = s.books.find(x => x.title === s.next_to_get_title) || {};
+  if (await addSeriesBookToWishlist(s.series, s.next_to_get_title, b.author, String(s.next_to_get))) await loadSeries();
+}
+
+async function renameSeries(i) {
+  const s = lastSeries[i];
+  if (!s) return;
+  const others = lastSeries.filter((_, k) => k !== i).map(x => x.series);
+  const hint = others.length ? `\n\nTo merge, type an existing name, e.g. "${others[0]}".` : '';
+  const to = prompt(`Rename "${s.series}" on all its books to:${hint}`, s.series);
+  if (to == null || !to.trim() || to.trim() === s.series) return;
+  try {
+    const r = await POST('/api/series/rename', { from_name: s.series, to_name: to.trim() });
+    showToast(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`, 'success');
+    await loadSeries();
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+async function findSeriesBook(i) {
+  const s = lastSeries[i];
+  if (!s) return;
   // Reuse the Add Book title search, prefilled with the series and number
   await showView('submit');
   switchSubmitMode('search');
   const input = document.getElementById('title-search-input');
   if (input) {
-    input.value = `${series} ${number}`;
+    input.value = `${s.series} ${s.next_to_get}`;
     runTitleSearch();
+  }
+}
+
+// --- Suggest series for books that have none ---------------------------------
+
+let seriesSuggestions = [];
+
+async function suggestSeries() {
+  showLoading(true, 'Checking your books for series…');
+  try {
+    const r = await POST('/api/series/suggest');
+    seriesSuggestions = r.suggestions;
+    showSeriesSuggestions(r.checked);
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    showLoading(false);
+  }
+}
+
+function showSeriesSuggestions(checked) {
+  const rows = seriesSuggestions.map((s, i) => `
+    <label class="suggest-row">
+      <input type="checkbox" checked data-i="${i}" />
+      <span>
+        <strong>${esc(s.title)}</strong><br />
+        <span class="hint">${esc(s.series)}${s.series_order ? ' #' + esc(s.series_order) : ''}</span>
+      </span>
+    </label>`).join('');
+  document.getElementById('modal-content').innerHTML = `
+    <h3 style="font-size:20px;font-weight:800;margin-bottom:8px">Series suggestions</h3>
+    <p class="hint" style="margin-bottom:12px">Checked ${checked} book${checked === 1 ? '' : 's'} with no series.
+      ${seriesSuggestions.length ? 'Untick any that look wrong, then save.' : 'None of them look like part of a series.'}</p>
+    <div class="suggest-list">${rows}</div>
+    <div class="step-actions">
+      ${seriesSuggestions.length ? '<button class="btn btn-primary" onclick="applySeriesSuggestions()">Save selected</button>' : ''}
+      <button class="btn btn-outline" onclick="closeModal()">${seriesSuggestions.length ? 'Cancel' : 'Close'}</button>
+    </div>`;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+
+async function applySeriesSuggestions() {
+  const picked = [...document.querySelectorAll('.suggest-row input:checked')]
+    .map(el => seriesSuggestions[+el.dataset.i]).filter(Boolean);
+  showLoading(true, 'Saving…');
+  let saved = 0;
+  try {
+    for (const s of picked) {
+      await PUT('/api/books/' + s.book_id, { series: s.series, series_order: s.series_order || '' });
+      saved++;
+    }
+    showToast(`Saved series for ${saved} book${saved === 1 ? '' : 's'}`, 'success');
+  } catch (e) {
+    showToast(e.message, 'error');
+  } finally {
+    showLoading(false);
+    closeModal();
+    await loadSeries();
+  }
+}
+
+// --- "Next in a series" on the Recommendations screen --------------------------
+
+let lastSeriesNext = [];
+
+async function loadSeriesNext(childId) {
+  const box = document.getElementById('recs-series');
+  if (!box) return;
+  if (!childId) { box.innerHTML = ''; return; }
+  try {
+    lastSeriesNext = await GET('/api/series/next/' + childId);
+  } catch { lastSeriesNext = []; }
+  if (!lastSeriesNext.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `
+    <h3 class="recs-section-title">Next in a series they like</h3>
+    <div class="series-next-list">
+      ${lastSeriesNext.map((n, i) => `
+        <div class="series-next-item">
+          <div>
+            <div class="series-next-title">${esc(n.title || '#' + n.series_order)}</div>
+            <div class="hint">${esc(n.series)}${n.series_order ? ' #' + esc(n.series_order) : ''}</div>
+          </div>
+          ${n.kind === 'owned'
+            ? `<button class="btn btn-outline btn-sm" onclick="openBookDetail(${n.book_id})">On the shelf</button>`
+            : n.kind === 'wishlist'
+              ? '<span class="series-pill">📋 On wishlist</span>'
+              : n.title
+                ? `<button class="btn btn-outline btn-sm" onclick="wantSeriesNext(${i})">+ Wishlist</button>`
+                : `<button class="btn btn-outline btn-sm" onclick="findSeriesNext(${i})">Find it</button>`}
+        </div>`).join('')}
+    </div>`;
+}
+
+async function findSeriesNext(i) {
+  const n = lastSeriesNext[i];
+  if (!n) return;
+  await showView('submit');
+  switchSubmitMode('search');
+  const input = document.getElementById('title-search-input');
+  if (input) {
+    input.value = `${n.series} ${n.series_order}`;
+    runTitleSearch();
+  }
+}
+
+async function wantSeriesNext(i) {
+  const n = lastSeriesNext[i];
+  if (!n) return;
+  if (await addSeriesBookToWishlist(n.series, n.title, n.author, n.series_order)) {
+    await loadSeriesNext(document.getElementById('recs-child-select').value);
   }
 }
 

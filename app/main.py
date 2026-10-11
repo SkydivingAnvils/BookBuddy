@@ -20,6 +20,9 @@ from sqlalchemy.orm import Session, joinedload
 
 from . import backup
 from .barcode import normalize_isbn, read_isbn
+from .series import (
+    build_overview, lookup_series_books, next_in_series, save_catalog, series_key, suggest_series,
+)
 from .books_api import (
     fetch_book_metadata, fetch_by_google_id, fetch_by_isbn, search_books,
     fetch_google_books_metadata, fetch_openlibrary_metadata,
@@ -29,7 +32,7 @@ from .books_api import (
 from .claude import get_recommendations, identify_book
 from .config import get_setting
 from .database import get_db, init_db
-from .models import Book, Child, Rating, Setting
+from .models import Book, Child, Rating, SeriesCatalog, Setting
 
 load_dotenv()
 
@@ -882,77 +885,142 @@ async def bulk_import(file: UploadFile = File(...), db: Session = Depends(get_db
 # Series
 # ---------------------------------------------------------------------------
 
-def _order_value(order: Optional[str]) -> Optional[float]:
-    try:
-        return float(order) if order not in (None, "") else None
-    except ValueError:
-        return None
+class SeriesName(BaseModel):
+    name: str
+
+
+class SeriesRename(BaseModel):
+    from_name: str
+    to_name: str
+
+
+class SeriesWant(BaseModel):
+    series: str
+    title: str
+    author: Optional[str] = ""
+    series_order: Optional[str] = None
+
+
+def _series_books(db: Session, name: str) -> list:
+    key = series_key(name)
+    return [b for b in db.query(Book).filter(Book.series.isnot(None)).all() if series_key(b.series) == key]
 
 
 @app.get("/api/series")
 def list_series(child_id: Optional[int] = None, db: Session = Depends(get_db)):
-    """Group books by series, with read state and gaps.
+    """Every series with read state, gaps, and (per child) what to read or get next."""
+    return build_overview(db, child_id)
 
-    With child_id, each series also gets next_up (the first owned book that child hasn't
-    read) and next_to_get (the first series number after the child's furthest-read book
-    that isn't in the house).
-    """
+
+@app.get("/api/series/next/{child_id}")
+def series_next(child_id: int, db: Session = Depends(get_db)):
+    """Next book in each series this child liked: one on the shelf, or one to get."""
+    if not db.get(Child, child_id):
+        raise HTTPException(status_code=404, detail="Child not found")
+    return next_in_series(db, child_id)
+
+
+@app.post("/api/series/catalog")
+def lookup_series_catalog(data: SeriesName, db: Session = Depends(get_db)):
+    """Look up (or refresh) the full list of books in a series and cache it."""
+    _require_api_key()
+    books = _series_books(db, data.name)
+    if not books:
+        raise HTTPException(status_code=404, detail="No books in that series yet")
+    examples = [{"title": b.title, "author": b.author} for b in books]
+    found = lookup_series_books(data.name.strip(), examples)
+    if not found:
+        raise HTTPException(status_code=404, detail=f"Couldn't find a book list for \"{data.name}\".")
+    save_catalog(db, series_key(data.name), data.name.strip(), found)
+    return {"ok": True, "count": len(found["books"]), "complete": found["complete"]}
+
+
+@app.post("/api/series/rename")
+def rename_series(data: SeriesRename, db: Session = Depends(get_db)):
+    """Rename a series on every book in it (also merges it into an existing series)."""
+    to_name = data.to_name.strip()
+    if not to_name:
+        raise HTTPException(status_code=400, detail="New series name is required")
+    books = _series_books(db, data.from_name)
+    for b in books:
+        b.series = to_name
+        b.updated_at = datetime.utcnow()
+
+    # Keep a looked-up book list with the renamed series, unless the target has its own
+    old_key, new_key = series_key(data.from_name), series_key(to_name)
+    if old_key != new_key:
+        old = db.get(SeriesCatalog, old_key)
+        if old:
+            if db.get(SeriesCatalog, new_key):
+                db.delete(old)
+            else:
+                db.add(SeriesCatalog(key=new_key, name=to_name, books=old.books,
+                                     complete=old.complete, source=old.source, fetched_at=old.fetched_at))
+                db.delete(old)
+    db.commit()
+    return {"updated": len(books)}
+
+
+@app.post("/api/series/want", status_code=201)
+def want_series_book(data: SeriesWant, db: Session = Depends(get_db)):
+    """Add a series book to the wishlist, with metadata, in one step."""
+    title = data.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    existing = _find_by_title_author(db, title, (data.author or "").strip())
+    if existing:
+        return {"duplicate": True, "book_id": existing.id, "title": existing.title}
+
+    meta = fetch_book_metadata(title, data.author or "") or {}
+    book = Book(
+        title=meta.get("title") or title,
+        author=meta.get("author") or data.author or "",
+        isbn=normalize_isbn(meta.get("isbn") or "") or meta.get("isbn") or None,
+        cover_url=meta.get("cover_url") or None,
+        description=meta.get("description") or None,
+        published_date=meta.get("published_date") or None,
+        page_count=meta.get("page_count"),
+        genres=json.dumps(meta.get("genres") or []),
+        google_books_id=meta.get("google_books_id") or None,
+        reading_level=meta.get("reading_level"),
+        series=data.series.strip(),
+        series_order=data.series_order,
+        status="wishlist",
+    )
+    db.add(book)
+    db.commit()
+    return {"ok": True, "book_id": book.id, "title": book.title, "duplicate": False}
+
+
+SUGGEST_LIMIT = 40
+
+
+@app.post("/api/series/suggest")
+def suggest_series_endpoint(db: Session = Depends(get_db)):
+    """Suggest series name and number for books that have none. Nothing is saved."""
+    _require_api_key()
     books = (
         db.query(Book)
-        .filter(Book.series.isnot(None), Book.series != "")
-        .options(joinedload(Book.ratings).joinedload(Rating.child))
+        .filter((Book.series.is_(None)) | (Book.series == ""))
+        .order_by(Book.created_at.desc())
+        .limit(SUGGEST_LIMIT)
         .all()
     )
-
-    groups: dict = {}
-    for book in books:
-        key = book.series.strip().lower()
-        group = groups.setdefault(key, {"series": book.series.strip(), "books": []})
-        readers = sorted(r.child.name for r in book.ratings if r.child)
-        group["books"].append({
-            "id": book.id,
-            "title": book.title,
-            "author": book.author,
-            "cover_url": book.cover_url,
-            "series_order": book.series_order,
-            "status": book.status or "library",
-            "readers": readers,
-            "read": child_id is not None and any(r.child_id == child_id for r in book.ratings),
-        })
-
-    result = []
-    for group in groups.values():
-        entries = group["books"]
-        entries.sort(key=lambda b: (_order_value(b["series_order"]) is None,
-                                    _order_value(b["series_order"]) or 0, b["title"].lower()))
-        # Gaps are measured against books on the shelf; wishlisted ones still count as missing
-        orders = {_order_value(b["series_order"]) for b in entries if b["status"] == "library"} - {None}
-        whole = {int(o) for o in orders if o == int(o)}
-        missing = [n for n in range(1, max(whole) + 1) if n not in whole] if whole else []
-
-        group.update({
-            "owned_count": sum(b["status"] == "library" for b in entries),
-            "read_count": sum(b["read"] for b in entries),
-            "missing": missing,
-            "next_up": None,
-            "next_to_get": None,
-        })
-        if child_id is not None:
-            group["next_up"] = next(
-                (b for b in entries if b["status"] == "library" and not b["read"]), None)
-            read_orders = [_order_value(b["series_order"]) for b in entries if b["read"]]
-            read_orders = [o for o in read_orders if o is not None]
-            if read_orders and not group["next_up"]:
-                furthest = int(max(read_orders))
-                candidate = furthest + 1
-                while candidate in whole:
-                    candidate += 1
-                group["next_to_get"] = candidate
-        result.append(group)
-
-    # Series with something to do next come first, then alphabetical
-    result.sort(key=lambda g: (not (g["next_up"] or g["next_to_get"]), g["series"].lower()))
-    return result
+    if not books:
+        return {"suggestions": [], "checked": 0}
+    known = sorted({b.series.strip() for b in db.query(Book).filter(Book.series.isnot(None), Book.series != "")})
+    found = suggest_series([{"id": b.id, "title": b.title, "author": b.author} for b in books], known)
+    if found is None:
+        raise HTTPException(status_code=502, detail="Couldn't get suggestions right now. Please try again.")
+    by_id = {b.id: b for b in books}
+    return {
+        "checked": len(books),
+        "suggestions": [
+            {"book_id": s["id"], "title": by_id[s["id"]].title, "author": by_id[s["id"]].author,
+             "series": s["series"].strip(), "series_order": s["series_order"].strip() or None}
+            for s in found if s.get("id") in by_id
+        ],
+    }
 
 
 # ---------------------------------------------------------------------------

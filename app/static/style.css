@@ -1357,3 +1357,22 @@ input[type="range"]::-webkit-slider-thumb {
   font-size: 12px; font-weight: 600;
 }
 .upload-hint { text-align: center; margin: 8px 0 0; }
+
+.series-book-missing .series-book-title { color: var(--text-muted); font-style: italic; }
+.series-book-missing { cursor: default; }
+.series-card-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.series-rename { font-size: 12px; color: var(--text-muted); }
+.series-pill { font-size: 12px; color: var(--primary); white-space: nowrap; }
+.series-suggest-btn { margin-bottom: 12px; }
+.btn-xs { padding: 3px 8px; font-size: 12px; min-height: 0; }
+.suggest-list { max-height: 50vh; overflow-y: auto; margin-bottom: 12px; }
+.suggest-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--border); font-size: 14px; }
+.suggest-row input { margin-top: 3px; }
+.recs-section-title { font-size: 15px; margin: 4px 0 8px; }
+.series-next-list { margin-bottom: 16px; }
+.series-next-item {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 10px 12px; margin-bottom: 8px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--r-md);
+}
+.series-next-title { font-weight: 600; font-size: 14px; }
