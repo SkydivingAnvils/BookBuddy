@@ -179,6 +179,39 @@ def fetch_book_metadata(title: str, author: str = "") -> Optional[dict]:
     return fetch_google_books_metadata(title, author) or fetch_openlibrary_metadata(title, author)
 
 
+def fetch_by_isbn(isbn: str) -> Optional[dict]:
+    """Exact lookup by ISBN-13: Google Books, then Open Library.
+
+    Hardcover is left out because its search is free-text and can return an unrelated book.
+    """
+    result = None
+    try:
+        with httpx.Client(timeout=TIMEOUT) as client:
+            r = client.get(GOOGLE_BOOKS_BASE, params={"q": f"isbn:{isbn}", "maxResults": 1, **_google_params()})
+            r.raise_for_status()
+            items = r.json().get("items", [])
+            if items:
+                result = _extract_google_volume(items[0])
+    except Exception as e:
+        logger.error("Google Books ISBN lookup error: %s", e)
+
+    if not result:
+        try:
+            with httpx.Client(timeout=TIMEOUT) as client:
+                r = client.get(OPEN_LIBRARY_SEARCH, params={"isbn": isbn, "limit": 1})
+                r.raise_for_status()
+                docs = r.json().get("docs", [])
+                if docs:
+                    result = _extract_ol_doc(docs[0])
+        except Exception as e:
+            logger.error("Open Library ISBN lookup error: %s", e)
+
+    if result:
+        # Keep the scanned ISBN rather than whichever edition's ISBN the source listed
+        result["isbn"] = isbn
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Explicit single-source fetchers (used by the source selector)
 # ---------------------------------------------------------------------------

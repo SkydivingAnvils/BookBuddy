@@ -12,14 +12,16 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from . import backup
+from .barcode import normalize_isbn, read_isbn
 from .books_api import (
-    fetch_book_metadata, fetch_by_google_id, search_books,
+    fetch_book_metadata, fetch_by_google_id, fetch_by_isbn, search_books,
     fetch_google_books_metadata, fetch_openlibrary_metadata,
     fetch_hardcover_metadata, fetch_metadata_from_claude,
     search_google_books, search_open_library, search_hardcover,
@@ -300,8 +302,6 @@ def delete_child(child_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/identify")
 async def identify_book_endpoint(image: UploadFile = File(...)):
-    _require_api_key()
-
     media_type = image.content_type or "image/jpeg"
     if media_type not in {"image/jpeg", "image/png", "image/gif", "image/webp"}:
         media_type = "image/jpeg"
@@ -309,17 +309,40 @@ async def identify_book_endpoint(image: UploadFile = File(...)):
     image_data = await image.read()
     if len(image_data) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="Image too large. Maximum size is 10 MB.")
+
+    threshold = _confidence_threshold()
+
+    # A barcode gives an exact edition and costs no Claude call, so try it first
+    isbn = await run_in_threadpool(read_isbn, image_data)
+    if isbn:
+        meta = await run_in_threadpool(fetch_by_isbn, isbn)
+        if meta:
+            return {
+                "title": meta.get("title", ""), "author": meta.get("author", ""),
+                "confidence": 1.0, "isbn": isbn, "source": "barcode",
+                "threshold": threshold, "above_threshold": True,
+            }
+        if not os.getenv("ANTHROPIC_API_KEY"):
+            # Barcode read but no source knows it: let the user search or type it in
+            return {
+                "title": "", "author": "", "confidence": 0.0, "isbn": isbn, "source": "barcode",
+                "threshold": threshold, "above_threshold": False,
+            }
+
+    _require_api_key()
     try:
-        result = identify_book(image_data, media_type)
+        result = await run_in_threadpool(identify_book, image_data, media_type)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error("Identification error: %s", e)
         raise HTTPException(status_code=500, detail="Book identification failed. Please try again.")
 
-    threshold = _confidence_threshold()
     result["threshold"] = threshold
     result["above_threshold"] = float(result.get("confidence", 0)) >= threshold
+    result["source"] = "cover"
+    if isbn:
+        result["isbn"] = isbn
     return result
 
 
@@ -343,8 +366,15 @@ def search_books_endpoint(q: str, source: str = "auto"):
 
 
 @app.get("/api/books/metadata")
-def get_metadata(title: str = "", author: str = "", google_books_id: str = "", source: str = "auto"):
+def get_metadata(title: str = "", author: str = "", google_books_id: str = "", source: str = "auto",
+                 isbn: str = ""):
     result = None
+    isbn = normalize_isbn(isbn) or ""
+
+    if isbn and source == "auto":
+        result = fetch_by_isbn(isbn)
+        if result:
+            return result
 
     if source == "google":
         if google_books_id:
@@ -372,7 +402,7 @@ def get_metadata(title: str = "", author: str = "", google_books_id: str = "", s
             "google_books_id": "",
             "title": title,
             "author": author,
-            "isbn": "",
+            "isbn": isbn,
             "cover_url": "",
             "description": "",
             "published_date": "",
@@ -393,9 +423,13 @@ def metadata_sources():
 
 
 @app.get("/api/books/check-duplicate")
-def check_duplicate(title: str = "", author: str = "", google_books_id: str = "", db: Session = Depends(get_db)):
+def check_duplicate(title: str = "", author: str = "", google_books_id: str = "", isbn: str = "",
+                    db: Session = Depends(get_db)):
     book = None
-    if google_books_id:
+    isbn = normalize_isbn(isbn)
+    if isbn:
+        book = db.query(Book).filter(Book.isbn == isbn).first()
+    if not book and google_books_id:
         book = db.query(Book).filter(Book.google_books_id == google_books_id).first()
     if not book and title and author:
         book = (
@@ -452,7 +486,10 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
 
     # Duplicate detection
     book = None
-    if data.google_books_id:
+    isbn = normalize_isbn(data.isbn or "")
+    if isbn:
+        book = db.query(Book).filter(Book.isbn == isbn).first()
+    if not book and data.google_books_id:
         book = db.query(Book).filter(Book.google_books_id == data.google_books_id).first()
     if not book:
         book = (
@@ -468,7 +505,7 @@ def submit_book(data: BookSubmit, db: Session = Depends(get_db)):
         book = Book(
             title=data.title,
             author=data.author,
-            isbn=data.isbn,
+            isbn=isbn or data.isbn,
             cover_url=data.cover_url,
             description=data.description,
             published_date=data.published_date,

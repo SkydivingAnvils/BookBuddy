@@ -2,6 +2,14 @@
 
 BookBuddy is a self-hosted family reading tracker: photograph a children's book cover and it automatically identifies the book, fetches metadata, and lets you log ratings per child. It runs as a single Docker container on your home server.
 
+### Cover photo or barcode
+
+When you add a book, BookBuddy first looks for an ISBN barcode in the photo. If it finds one, it looks the book up by ISBN in Google Books and then Open Library. That gives the exact edition and doesn't use Claude at all. If there's no barcode, or no source knows that ISBN, Claude identifies the book from the cover as before.
+
+- Photograph the barcode on the back cover, filling a good part of the frame and in focus.
+- Only book barcodes (ISBNs starting 978 or 979) are used, so library stickers and price barcodes are ignored.
+- It works over plain `http://` on your home network, because it reads the photo you take rather than a live camera feed.
+
 ---
 
 ## Prerequisites

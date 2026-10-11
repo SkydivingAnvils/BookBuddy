@@ -858,23 +858,43 @@ async function runIdentify() {
 
 function confirmIdentification() {
   if (!submit.identified) return;
-  fetchMetadata(submit.identified.title || '', submit.identified.author || '', '');
+  fetchMetadata(submit.identified.title || '', submit.identified.author || '', '', 'auto', submit.identified.isbn || '');
 }
 
 function showIdentifyResult(result) {
   const area = document.getElementById('identify-result-area');
   const pct = Math.round((result.confidence || 0) * 100);
   const barColor = result.above_threshold ? 'var(--success)' : 'var(--accent)';
+  const fromBarcode = result.source === 'barcode';
+  const barcodeBadge = result.isbn
+    ? `<div class="identify-barcode">📷 ${fromBarcode && result.title ? 'Read from barcode' : 'Barcode found'} · ISBN ${esc(result.isbn)}</div>`
+    : '';
+
+  if (fromBarcode && !result.title) {
+    area.innerHTML = `
+      <div class="warning-banner">
+        ⚠️ We read the barcode (ISBN ${esc(result.isbn)}) but couldn't find that book in Google Books or Open Library.
+        Search for it or enter it below and the ISBN will be kept.
+      </div>
+      <div class="fix-action-row">
+        <button class="btn btn-primary" onclick="showFixSearch()">🔍 Search</button>
+        <button class="btn btn-outline" onclick="showManualEntry()">✏️ Enter Manually</button>
+      </div>`;
+    document.getElementById('fix-search-panel').classList.add('hidden');
+    document.getElementById('manual-entry-panel').classList.add('hidden');
+    return;
+  }
 
   const cardHtml = `
     <div class="identify-card">
+      ${barcodeBadge}
       <div class="identify-card-title">${esc(result.title || 'Unknown title')}</div>
       <div class="identify-card-author">${esc(result.author || 'Unknown author')}</div>
       <div class="confidence-bar-wrap">
         <div class="confidence-bar-track">
           <div class="confidence-bar-fill" style="width:${pct}%;background:${barColor}"></div>
         </div>
-        <div class="confidence-label">${pct}% sure</div>
+        <div class="confidence-label">${fromBarcode ? 'Exact match' : pct + '% sure'}</div>
       </div>
     </div>`;
 
@@ -986,12 +1006,13 @@ async function loadAvailableSources() {
   try { availableSources = await GET('/api/metadata-sources'); } catch (_) {}
 }
 
-async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
+async function fetchMetadata(title, author, googleBooksId, source = 'auto', isbn = '') {
   showLoading(true, 'Fetching book details…');
   try {
     const params = new URLSearchParams();
     if (googleBooksId) params.set('google_books_id', googleBooksId);
     else { if (title) params.set('title', title); if (author) params.set('author', author); }
+    if (isbn) params.set('isbn', isbn);
     if (source !== 'auto') params.set('source', source);
 
     const [meta, dupCheck] = await Promise.all([
@@ -999,6 +1020,8 @@ async function fetchMetadata(title, author, googleBooksId, source = 'auto') {
       GET('/api/books/check-duplicate?' + params.toString()),
     ]);
 
+    // A scanned barcode is exact, even when the user had to find the book by search
+    if (submit.identified?.isbn) meta.isbn = submit.identified.isbn;
     submit.metadata = meta;
     submit.isDuplicate = dupCheck.exists;
     submit.existingBookId = dupCheck.book_id;
@@ -1031,8 +1054,10 @@ async function refetchMetadata(source) {
     if (searchTitle)  params.set('title', searchTitle);
     if (searchAuthor) params.set('author', searchAuthor);
     if (source === 'google' && meta.google_books_id) params.set('google_books_id', meta.google_books_id);
+    if (identified.isbn) params.set('isbn', identified.isbn);
     const fresh = await GET('/api/books/metadata?' + params.toString());
-    submit.metadata = { ...fresh, google_books_id: meta.google_books_id };
+    // A scanned ISBN is exact, so it wins over whichever edition a source returned
+    submit.metadata = { ...fresh, google_books_id: meta.google_books_id, isbn: identified.isbn || fresh.isbn };
     currentMetaSource = source;
     renderMetadataCard(submit.metadata);
     showToast(SOURCE_LABELS[source] + ' metadata loaded', 'success');
